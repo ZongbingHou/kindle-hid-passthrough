@@ -3,7 +3,7 @@
 Kindle model detection and hardware defaults.
 
 Identifies the Kindle model from the device serial number and provides
-hardware-specific defaults (BT device path, kernel module, processes to kill).
+hardware-specific defaults (BT device path, kernel module, transport).
 
 Only BT-capable Kindles (Oasis 1 / 2016 onwards) are included.
 
@@ -18,6 +18,7 @@ at positions 2-3. New serials (prefix G) encode as 3-char base32 at
 positions 3-5.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -32,9 +33,12 @@ _B32_LOOKUP = {c: i for i, c in enumerate(_B32_CHARS)}
 @dataclass
 class KindleDefaults:
     """Hardware defaults for a Kindle model."""
-    device_path: str            # BT character device (e.g. /dev/stpbt)
-    kernel_module: str          # Primary kernel module filename
-    model_name: str             # Human-readable generation name
+    device_path: str                    # BT device (e.g. /dev/stpbt, /dev/ttymxc2)
+    kernel_module: Optional[str]        # Primary kernel module filename
+    model_name: str                     # Human-readable generation name
+    transport_scheme: str = 'file'      # Bumble transport scheme ('file' or 'serial')
+    baud_rate: Optional[int] = None     # Serial baud rate (for serial transport)
+    firmware_dir: Optional[str] = None  # BCM firmware directory (.hcd files)
 
 
 # --- Hardware profiles ---
@@ -42,22 +46,28 @@ class KindleDefaults:
 _MTK_HW = dict(
     device_path='/dev/stpbt',
     kernel_module='wmt_cdev_bt.ko',
+    transport_scheme='file',
 )
 
-# Broadcom BCM4343 over BSA (proprietary, not HCI-compatible).
-# These Kindles have BT hardware but use Broadcom's BSA protocol over UART,
-# which Bumble cannot speak. See: https://github.com/zampierilucas/kindle-hid-passthrough/issues/22
-_BRCM_HW = None
+# Broadcom BCM4343 over UART. Amazon's BSA daemon (bsa_server) normally owns
+# the UART, but the chip itself speaks standard HCI. We kill bsa_server and
+# talk HCI directly, downloading .hcd firmware first.
+_BRCM_HW = dict(
+    device_path='/dev/ttymxc2',
+    kernel_module=None,
+    transport_scheme='serial',
+    baud_rate=115200,
+    firmware_dir='/opt/brcm_4343w/bluetooth/firmware',
+)
 
 
 # --- Generations with device codes ---
 # Each entry: (name, hw_profile, [device_codes], codename)
 # Device codes are integers derived from KindleTool model_tuples.
-# hw_profile=None means detected but unsupported.
 # codename drives bundled uhid.ko lookup; None for MTK (kernel has /dev/uhid).
 
 _GENERATIONS = [
-    # NXP i.MX + Broadcom BCM4343 (8th-10th gen, BSA stack, unsupported)
+    # NXP i.MX + Broadcom BCM4343 (8th-10th gen, UART HCI)
     ('Kindle Oasis 1',   _BRCM_HW, [0x20C, 0x20D, 0x219, 0x21A, 0x21B, 0x21C], 'duet'),
     ('Kindle Oasis 2',   _BRCM_HW, [0x295, 0x296, 0x297, 0x298, 0x2E1, 0x2E2, 0x2E6, 0x2E7, 0x2E8, 0x341, 0x342, 0x343, 0x344, 0x347, 0x34A], 'zelda'),
     ('Kindle PW4',       _BRCM_HW, [
@@ -135,7 +145,7 @@ def detect_kindle(serial: str = None) -> Optional[KindleDefaults]:
     if serial is None:
         serial = read_serial()
     if not serial:
-        log.debug(f"Could not read Kindle serial from {USID_PATH}")
+        log.debug("Could not read Kindle serial from %s", USID_PATH)
         return None
 
     device_code = _decode_device_code(serial)
@@ -145,21 +155,19 @@ def detect_kindle(serial: str = None) -> Optional[KindleDefaults]:
 
     result = _CODE_LOOKUP.get(device_code)
     if result is None:
-        log.info(f"Unknown device code 0x{device_code:X} (pre-BT or unrecognized)")
+        log.info("Unknown device code 0x%X (pre-BT or unrecognized)", device_code)
         return None
 
     name, hw, _codename = result
-    if hw is None:
-        log.error(f"Detected {name} (code 0x{device_code:X}) - uses Broadcom BSA stack, not supported. "
-                   "See https://github.com/zampierilucas/kindle-hid-passthrough/issues/22")
-        return None
-
     defaults = KindleDefaults(
         device_path=hw['device_path'],
-        kernel_module=hw['kernel_module'],
+        kernel_module=hw.get('kernel_module'),
         model_name=name,
+        transport_scheme=hw.get('transport_scheme', 'file'),
+        baud_rate=hw.get('baud_rate'),
+        firmware_dir=hw.get('firmware_dir'),
     )
-    log.info(f"Detected {name} (code 0x{device_code:X})")
+    log.info("Detected %s (code 0x%X)", name, device_code)
     return defaults
 
 
@@ -175,3 +183,20 @@ def detect_codename(serial: str = None) -> Optional[str]:
     if result is None:
         return None
     return result[2]
+
+
+def get_default_transport() -> Optional[str]:
+    """Get the default HCI transport spec for this Kindle.
+
+    Returns:
+        Transport string like 'file:/dev/stpbt' or
+        'serial:/dev/ttymxc2,115200', or None if unknown.
+    """
+    defaults = detect_kindle()
+    if not defaults:
+        return None
+    if defaults.transport_scheme == 'serial':
+        return f'serial:{defaults.device_path},{defaults.baud_rate}'
+    if os.path.exists(defaults.device_path):
+        return f'file:{defaults.device_path}'
+    return None

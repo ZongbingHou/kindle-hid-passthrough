@@ -20,6 +20,7 @@ import signal
 import subprocess
 import time
 
+from bcm_firmware import download_firmware
 from kindle_detect import detect_codename, detect_kindle
 from logging_utils import log
 
@@ -99,8 +100,6 @@ def _free_device(device_path):
     try:
         r = subprocess.run(['fuser', '-k', device_path],
                            capture_output=True, timeout=5)
-        # fuser returns 0 if a process was found+signalled, 1 if no
-        # process held the file. Both are success for our purposes.
         if r.returncode == 0:
             holders = r.stderr.decode(errors='replace').strip()
             log.info(f"Evicted holders of {device_path}: {holders}")
@@ -197,20 +196,35 @@ def _is_device_free(device_path):
         return False
 
 
+def _extract_device_path(transport_spec):
+    """Extract the device path from a Bumble transport spec string."""
+    if not transport_spec:
+        return None
+    if transport_spec.startswith('file:'):
+        return transport_spec[5:]
+    if transport_spec.startswith('serial:'):
+        spec = transport_spec[7:]
+        return spec.split(',')[0]
+    return None
+
+
 def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
     """Prepare Bluetooth hardware for use.
 
-    1. Load BT kernel module if not already loaded
-    2. Evict whatever process is holding the HCI device (fuser, then a
-       direct /proc scan if fuser is unavailable or comes up short)
-    3. Wait for device to settle
+    For MediaTek Kindles (11th gen+):
+      1. Load BT kernel module if needed
+      2. Evict processes holding /dev/stpbt (fuser, then a direct /proc
+         scan if fuser is unavailable or comes up short)
+      3. Verify /dev/stpbt is accessible
 
-    Uses auto-detected Kindle hardware defaults when module_patterns
-    is not specified and not overridden in config.ini.
+    For Broadcom Kindles (8th-10th gen):
+      1. Evict BSA processes holding the UART (via fuser)
+      2. Download .hcd firmware to chip over UART
+      3. Verify UART is accessible
 
     Args:
-        transport_spec: Transport string (e.g. 'file:/dev/stpbt') to
-                       extract device path. If None, uses /dev/stpbt.
+        transport_spec: Transport string (e.g. 'file:/dev/stpbt',
+                       'serial:/dev/ttymxc2,115200').
         module_patterns: List of module filename patterns to search for.
         settle_time: Seconds to wait after evicting holders.
 
@@ -220,22 +234,45 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
     # Load bundled uhid.ko first; no-op on Kindles where /dev/uhid already exists
     _ensure_uhid()
 
-    # Use auto-detected Kindle defaults when not explicitly provided
     kindle = detect_kindle()
 
-    # Extract device path from transport spec, or use detected default
-    device_path = '/dev/stpbt'
-    if transport_spec and transport_spec.startswith('file:'):
-        device_path = transport_spec[5:]
-    elif kindle:
+    device_path = _extract_device_path(transport_spec) or '/dev/stpbt'
+    if kindle and not transport_spec:
         device_path = kindle.device_path
 
-    if module_patterns is None and kindle:
+    if module_patterns is None and kindle and kindle.kernel_module:
         module_patterns = [kindle.kernel_module]
 
     log.info("Preparing Bluetooth hardware...")
 
-    # Step 1: Load kernel module
+    if kindle and kindle.firmware_dir:
+        return _prepare_brcm(kindle, settle_time)
+
+    return _prepare_standard(device_path, module_patterns, settle_time)
+
+
+def _prepare_brcm(kindle, settle_time):
+    """Prepare Broadcom BCM4343 hardware."""
+    device_path = kindle.device_path
+
+    log.info(f"Freeing {device_path} from BSA...")
+    if _free_device(device_path) and settle_time > 0:
+        time.sleep(settle_time)
+
+    if not os.path.exists(device_path):
+        log.error(f"{device_path} does not exist")
+        return False
+
+    if not download_firmware(device_path, kindle.firmware_dir, kindle.baud_rate or 115200):
+        log.error("BCM firmware download failed")
+        return False
+
+    log.info(f"{device_path} ready (BCM firmware loaded)")
+    return True
+
+
+def _prepare_standard(device_path, module_patterns, settle_time):
+    """Prepare standard (MediaTek) hardware."""
     module_path = _find_bt_module(module_patterns)
     if module_path:
         if _is_module_loaded(module_path):
@@ -244,13 +281,12 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
             log.info(f"Loading BT module: {module_path}")
             if _run(['/sbin/insmod', module_path]):
                 log.info("BT module loaded")
-                time.sleep(0.5)  # wait for /dev node to appear
+                time.sleep(0.5)
             else:
                 log.warning(f"Failed to load {module_path} (may need root)")
     else:
         log.info("No BT kernel module found (may already be built-in)")
 
-    # Step 2: Check if device is available
     if not os.path.exists(device_path):
         log.warning(f"{device_path} does not exist")
         return False
@@ -259,7 +295,6 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
         log.info(f"{device_path} is available")
         return True
 
-    # Step 3: Device is busy - evict whoever holds it, first via fuser
     log.info(f"{device_path} is busy, evicting holder...")
     if _free_device(device_path) and settle_time > 0:
         time.sleep(settle_time)
@@ -268,8 +303,6 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
         log.info(f"{device_path} is now available")
         return True
 
-    # Step 4: fuser came up short (missing or didn't catch the holder).
-    # Scan /proc ourselves and kill whoever has the device open.
     log.warning(f"{device_path} still busy, scanning /proc for holders...")
     if _kill_holders_via_proc(device_path) and settle_time > 0:
         time.sleep(settle_time)
@@ -278,7 +311,6 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
         log.info(f"{device_path} is now available")
         return True
 
-    # Last resort: try again with a longer wait
     log.warning(f"{device_path} still busy, waiting 2s...")
     time.sleep(2.0)
 
