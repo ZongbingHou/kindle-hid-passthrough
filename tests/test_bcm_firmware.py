@@ -339,7 +339,7 @@ class TestDownloadFirmware:
 class TestKindleDetectTransport:
     def test_brcm_transport_string(self):
         from kindle_detect import detect_kindle
-        # Kindle Oasis 1 device code 0x20C -> serial prefix B0 + hex
+        # Kindle Oasis device code 0x20C -> serial prefix B0 + hex
         # Serial: B0 + 2-char hex of 0x0C (position 2-3) won't work for 0x20C
         # since 0x20C > 0xFF, this would be a G-serial
         # Let's test with a known BRCM code using B-serial where code fits in 1 byte
@@ -347,7 +347,7 @@ class TestKindleDetectTransport:
         # For testing, let's just verify the data structure
         from kindle_detect import _CODE_LOOKUP, _BRCM_HW
         name, hw = _CODE_LOOKUP[0x20C]
-        assert name == 'Kindle Oasis 1'
+        assert name == 'Kindle Oasis'
         assert hw is _BRCM_HW
         assert hw['transport_scheme'] == 'serial'
         assert hw['device_path'] == '/dev/ttymxc2'
