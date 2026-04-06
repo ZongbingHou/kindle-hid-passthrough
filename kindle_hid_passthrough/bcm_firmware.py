@@ -124,9 +124,10 @@ def _find_hcd_file(firmware_dir):
     if not hcd_files:
         return None
 
-    # If multiple, prefer the largest (most complete patchram)
-    hcd_files.sort(key=os.path.getsize, reverse=True)
-    return hcd_files[0]
+    # If multiple, pick the latest version (filenames contain zero-padded
+    # version numbers like BCM4343A1_001.002.009.0152.0517.hcd)
+    hcd_files.sort()
+    return hcd_files[-1]
 
 
 def _parse_hcd(data):

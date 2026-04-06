@@ -219,13 +219,11 @@ class TestFindHcdFile:
         result = _find_hcd_file(str(tmp_path))
         assert result == str(hcd)
 
-    def test_prefers_largest(self, tmp_path):
-        small = tmp_path / 'small.hcd'
-        small.write_bytes(b'\x00' * 10)
-        large = tmp_path / 'large.hcd'
-        large.write_bytes(b'\x00' * 1000)
+    def test_prefers_latest_version(self, tmp_path):
+        (tmp_path / 'BCM4343A1_001.002.009.0062.0363.hcd').write_bytes(b'\x00' * 1000)
+        (tmp_path / 'BCM4343A1_001.002.009.0152.0517.hcd').write_bytes(b'\x00' * 10)
         result = _find_hcd_file(str(tmp_path))
-        assert result == str(large)
+        assert result == str(tmp_path / 'BCM4343A1_001.002.009.0152.0517.hcd')
 
     def test_empty_directory(self, tmp_path):
         assert _find_hcd_file(str(tmp_path)) is None
