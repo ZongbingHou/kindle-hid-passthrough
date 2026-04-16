@@ -18,7 +18,6 @@ at positions 2-3. New serials (prefix G) encode as 3-char base32 at
 positions 3-5.
 """
 
-import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -143,7 +142,7 @@ def detect_kindle(serial: str = None) -> Optional[KindleDefaults]:
     if serial is None:
         serial = read_serial()
     if not serial:
-        log.debug("Could not read Kindle serial from %s", USID_PATH)
+        log.debug(f"Could not read Kindle serial from {USID_PATH}")
         return None
 
     device_code = _decode_device_code(serial)
@@ -153,7 +152,7 @@ def detect_kindle(serial: str = None) -> Optional[KindleDefaults]:
 
     result = _CODE_LOOKUP.get(device_code)
     if result is None:
-        log.info("Unknown device code 0x%X (pre-BT or unrecognized)", device_code)
+        log.info(f"Unknown device code 0x{device_code:X} (pre-BT or unrecognized)")
         return None
 
     name, hw, _codename = result
@@ -165,7 +164,7 @@ def detect_kindle(serial: str = None) -> Optional[KindleDefaults]:
         baud_rate=hw.get('baud_rate'),
         firmware_dir=hw.get('firmware_dir'),
     )
-    log.info("Detected %s (code 0x%X)", name, device_code)
+    log.info(f"Detected {name} (code 0x{device_code:X})")
     return defaults
 
 
@@ -181,20 +180,3 @@ def detect_codename(serial: str = None) -> Optional[str]:
     if result is None:
         return None
     return result[2]
-
-
-def get_default_transport() -> Optional[str]:
-    """Get the default HCI transport spec for this Kindle.
-
-    Returns:
-        Transport string like 'file:/dev/stpbt' or
-        'serial:/dev/ttymxc2,115200', or None if unknown.
-    """
-    defaults = detect_kindle()
-    if not defaults:
-        return None
-    if defaults.transport_scheme == 'serial':
-        return f'serial:{defaults.device_path},{defaults.baud_rate}'
-    if os.path.exists(defaults.device_path):
-        return f'file:{defaults.device_path}'
-    return None

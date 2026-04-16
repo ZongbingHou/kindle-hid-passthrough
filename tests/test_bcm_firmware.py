@@ -377,3 +377,13 @@ class TestKindleDetectTransport:
         assert defaults.transport_scheme == 'serial'
         assert defaults.baud_rate == 115200
         assert defaults.firmware_dir is not None
+
+    def test_detect_kindle_logs_without_typeerror(self):
+        # Regression: HIDLogger doesn't accept stdlib-style *args lazy format.
+        # Exercise every log path in detect_kindle() to catch any future
+        # `log.info("fmt %s", arg)` calls that would crash at runtime.
+        from kindle_detect import detect_kindle
+        assert detect_kindle('G000K90563120LDD').model_name == 'Kindle Basic 2'
+        assert detect_kindle('G000P812744104HX').model_name == 'Kindle Oasis 2'
+        assert detect_kindle('G000A0A0000000000') is None  # unknown code path
+        assert detect_kindle('') is None                    # empty serial path
