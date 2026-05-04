@@ -20,7 +20,7 @@ import signal
 import subprocess
 import time
 
-from bcm_firmware import download_firmware
+from bcm_firmware import download_firmware, prepare_chip_hardware
 from kindle_detect import detect_codename, detect_kindle
 from logging_utils import log
 
@@ -261,6 +261,10 @@ def _prepare_brcm(kindle, settle_time):
 
     if not os.path.exists(device_path):
         log.error(f"{device_path} does not exist")
+        return False
+
+    if not prepare_chip_hardware(kindle):
+        log.error("BCM chip hardware bring-up failed")
         return False
 
     if not download_firmware(device_path, kindle.firmware_dir, kindle.baud_rate or 115200):

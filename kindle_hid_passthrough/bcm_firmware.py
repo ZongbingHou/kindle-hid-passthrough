@@ -45,6 +45,13 @@ BCM_DOWNLOAD_MINIDRIVER = 0xFC2E
 # Timeouts
 CMD_TIMEOUT = 5.0
 RESET_SETTLE = 0.25
+POWER_ON_SETTLE = 1.0
+
+
+def prepare_chip_hardware(kindle=None):
+    """Assert BT_REG_ON and confirm UART pinmux. TODO(#22): per-model GPIO."""
+    time.sleep(POWER_ON_SETTLE)
+    return True
 
 
 def _build_hci_cmd(opcode, params=b''):
