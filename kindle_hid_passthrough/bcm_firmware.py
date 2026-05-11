@@ -48,9 +48,30 @@ RESET_SETTLE = 0.25
 POWER_ON_SETTLE = 1.0
 
 
+BT_ENABLE_PATHS = (
+    '/proc/bluetooth/btenable',
+    '/sys/devices/platform/bt_pwr_ctrl/btenable',
+)
+
+
 def prepare_chip_hardware(kindle=None):
-    """Assert BT_REG_ON and confirm UART pinmux. TODO(#22): per-model GPIO."""
-    time.sleep(POWER_ON_SETTLE)
+    """Power-cycle the BCM chip via Amazon's bt_pwr_ctrl driver."""
+    for path in BT_ENABLE_PATHS:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, 'w') as f:
+                f.write('0')
+            time.sleep(RESET_SETTLE)
+            with open(path, 'w') as f:
+                f.write('1')
+            time.sleep(POWER_ON_SETTLE)
+            log.info(f"BCM chip powered on via {path}")
+            return True
+        except OSError as e:
+            log.warning(f"Failed to toggle {path}: {e}")
+            return False
+    log.warning("bt_pwr_ctrl interface not found; chip may not be powered")
     return True
 
 
