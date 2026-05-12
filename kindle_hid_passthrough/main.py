@@ -22,6 +22,7 @@ sys.path.insert(0, '/mnt/us/kindle_hid_passthrough')
 
 from config import Protocol, config, get_version
 from daemon import main as daemon_main
+from bt_setup import prepare_bt
 from host import HIDHost
 from logging_utils import log
 from scanner import Scanner
@@ -43,6 +44,7 @@ async def pair_mode(protocol_filter: Protocol = None, sequential: bool = False):
     scanner = Scanner()
 
     try:
+        prepare_bt(transport_spec=scanner.transport_spec)
         await scanner.start()
 
         selected = None
