@@ -275,7 +275,7 @@ class TestDownloadFirmware:
             bytesize=8,
             parity='N',
             stopbits=1,
-            rtscts=True,
+            rtscts=False,
             timeout=5.0,
         )
 

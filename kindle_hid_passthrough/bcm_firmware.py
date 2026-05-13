@@ -45,7 +45,7 @@ BCM_DOWNLOAD_MINIDRIVER = 0xFC2E
 # Timeouts
 CMD_TIMEOUT = 5.0
 RESET_SETTLE = 0.25
-POWER_ON_SETTLE = 1.0
+POWER_ON_SETTLE = 2.0
 
 
 BT_ENABLE_PATHS = (
@@ -53,25 +53,40 @@ BT_ENABLE_PATHS = (
     '/sys/devices/platform/bt_pwr_ctrl/btenable',
 )
 
+BT_DEV_WAKE_PATHS = (
+    '/proc/bluetooth/sleep/btwake',
+    '/sys/devices/platform/bt_pwr_ctrl/btwake',
+)
 
-def prepare_chip_hardware(kindle=None):
-    """Power-cycle the BCM chip via Amazon's bt_pwr_ctrl driver."""
-    for path in BT_ENABLE_PATHS:
+
+def _write_first_existing(paths, value):
+    for path in paths:
         if not os.path.exists(path):
             continue
         try:
             with open(path, 'w') as f:
-                f.write('0')
-            time.sleep(RESET_SETTLE)
-            with open(path, 'w') as f:
-                f.write('1')
-            time.sleep(POWER_ON_SETTLE)
-            log.info(f"BCM chip powered on via {path}")
-            return True
+                f.write(value)
+            return path
         except OSError as e:
-            log.warning(f"Failed to toggle {path}: {e}")
-            return False
-    log.warning("bt_pwr_ctrl interface not found; chip may not be powered")
+            log.warning(f"Failed to write {value} to {path}: {e}")
+    return None
+
+
+def prepare_chip_hardware(kindle=None):
+    """Power-cycle the BCM chip via Amazon's bt_pwr_ctrl driver."""
+    if not _write_first_existing(BT_ENABLE_PATHS, '0'):
+        log.warning("bt_pwr_ctrl btenable not found; chip may not be powered")
+        return True
+    time.sleep(RESET_SETTLE)
+    path = _write_first_existing(BT_ENABLE_PATHS, '1')
+    if not path:
+        return False
+    log.info(f"BCM chip powered on via {path}")
+    time.sleep(POWER_ON_SETTLE)
+    wake = _write_first_existing(BT_DEV_WAKE_PATHS, '1')
+    if wake:
+        log.info(f"BT dev_wake asserted via {wake}")
+        time.sleep(RESET_SETTLE)
     return True
 
 
@@ -208,7 +223,7 @@ def download_firmware(device_path, firmware_dir, baud_rate=115200):
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
-        rtscts=True,
+        rtscts=False,
         timeout=CMD_TIMEOUT,
     )
 
