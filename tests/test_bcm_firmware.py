@@ -368,7 +368,6 @@ class TestKindleDetectTransport:
         defaults = KindleDefaults(
             device_path='/dev/ttymxc2',
             kernel_module=None,
-            kill_processes=['bsa_server', 'btfd'],
             model_name='Kindle Oasis 2',
             transport_scheme='serial',
             baud_rate=115200,
