@@ -11,7 +11,7 @@ sys.path.insert(0, '/mnt/us/kindle_hid_passthrough')
 
 from api_server import APIServer, RequestHandler, PORT
 from bt_setup import prepare_bt
-from config import config, get_version, normalize_addr
+from config import config, get_version
 from controller import DaemonController
 from host import HIDHost
 from scanner import Scanner
@@ -24,31 +24,18 @@ class HIDDaemon:
     """Daemon that maintains persistent connection to an HID device."""
 
     def __init__(self):
-        self.device_address = None
         self.running = False
         self.host = None
         self._host_task = None
         self._suspended = False
         self._resume_event = asyncio.Event()
-        self._paired_host = None  # HIDHost handed off from controller after pairing
+        self._paired_host = None
 
     @property
     def connection_state(self) -> dict:
         """Current connection state for API."""
-        if self.host and self.host._is_connection_alive() and not self._suspended:
-            state = {
-                "connected": True,
-                "address": normalize_addr(self.host.current_device_address) if self.host.current_device_address else None,
-                "protocol": self.host.connected_protocol.value if self.host.connected_protocol else None,
-                "name": self.host.device_name,
-            }
-            if self.host.uhid_device:
-                state["uhid_name"] = self.host.uhid_device.name
-                if self.host.uhid_device.input_paths:
-                    state["input_paths"] = self.host.uhid_device.input_paths
-            if self.host.report_map:
-                state["descriptor_size"] = len(self.host.report_map)
-            return state
+        if self.host and not self._suspended:
+            return self.host.connection_state
         return {"connected": False}
 
     async def suspend(self):
@@ -101,30 +88,37 @@ class HIDDaemon:
             await host.cleanup()
             raise
 
+    async def disconnect(self):
+        """Drop the active connection; daemon keeps running and will reconnect."""
+        if self.host and self.host._is_connection_alive():
+            await self.host.connection.disconnect()
+        else:
+            logger.info("No active connection to disconnect")
+        if self._host_task and not self._host_task.done():
+            self._host_task.cancel()
+
     async def resume(self):
         """Resume connections after scan/pair."""
         logger.info("Daemon resuming...")
         self._suspended = False
         self._resume_event.set()
 
-    def load_device(self) -> bool:
-        """Load device(s) from config file."""
+    def _has_devices(self, log_details=False) -> bool:
+        """Check if any devices are configured."""
         devices = config.get_all_devices()
         if not devices:
-            logger.info(f"No devices in {config.devices_config_file}")
             return False
 
-        # Use first device's address
-        self.device_address, protocol, name = devices[0]
-
-        if len(devices) == 1 and self.device_address != '*':
-            display = f"{name} ({self.device_address})" if name else self.device_address
-            logger.info(f"Device: {display} ({protocol.value})")
-        else:
-            logger.info(f"Accepting {len(devices)} device(s):")
-            for addr, proto, dev_name in devices:
-                display = f"{dev_name} ({addr})" if dev_name else addr
-                logger.info(f"  - {display} ({proto.value})")
+        if log_details:
+            if len(devices) == 1 and devices[0][0] != '*':
+                addr, proto, name = devices[0]
+                display = f"{name} ({addr})" if name else addr
+                logger.info(f"Device: {display} ({proto.value})")
+            else:
+                logger.info(f"Accepting {len(devices)} device(s):")
+                for addr, proto, name in devices:
+                    display = f"{name} ({addr})" if name else addr
+                    logger.info(f"  - {display} ({proto.value})")
 
         return True
 
@@ -132,40 +126,26 @@ class HIDDaemon:
         """Main daemon loop."""
         self.running = True
 
-        if not self.load_device():
-            logger.info("No devices configured, waiting for pairing...")
-            while self.running and not self.load_device():
-                self._resume_event.clear()
-                await self._resume_event.wait()
-            if not self.running:
-                return
-
         logger.info(f"HID Daemon v{get_version()}")
 
         while self.running:
-            # Handle suspension
+            # Wait for devices if none configured or after suspend
             if self._suspended:
                 logger.info("Daemon suspended, waiting for resume...")
                 await self._resume_event.wait()
                 self._resume_event.clear()
                 if not self.running:
                     break
-                # Re-read devices.conf after resume
-                if not self.load_device():
-                    continue
-                continue
 
-            skip_delay = False
-
-            # Idle until a new pairing instead of busy-looping the radio.
-            if not config.get_all_devices():
+            if not self._has_devices(log_details=True):
                 logger.info("No devices configured, waiting for pairing...")
                 self._resume_event.clear()
                 await self._resume_event.wait()
                 if not self.running:
                     break
-                self.load_device()
                 continue
+
+            skip_delay = False
 
             try:
                 # Use handed-off host from controller pairing if available
@@ -198,27 +178,17 @@ class HIDDaemon:
 
             finally:
                 self._host_task = None
-                # Check for auth failure before cleanup
                 auth_fail_addr = None
-                if self.host and hasattr(self.host, 'get_auth_failure_address'):
-                    auth_fail_addr = self.host.get_auth_failure_address()
-
                 if self.host:
+                    auth_fail_addr = self.host.get_auth_failure_address()
                     try:
                         await self.host.cleanup()
                     except Exception:
                         pass
 
-                # Handle auth failure - clear stale key and retry immediately
                 if auth_fail_addr:
-                    logger.info(f"Auth failure detected for {auth_fail_addr}")
-                    try:
-                        temp_host = HIDHost()
-                        if hasattr(temp_host, 'clear_stale_key'):
-                            await temp_host.clear_stale_key(auth_fail_addr)
-                    except Exception as e:
-                        logger.warning(f"Failed to clear stale key: {e}")
-                    logger.info("Retrying connection immediately...")
+                    logger.info(f"Auth failure for {auth_fail_addr}, clearing stale key")
+                    config.remove_pairing_key(auth_fail_addr)
                     skip_delay = True
 
                 self.host = None

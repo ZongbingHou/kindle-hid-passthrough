@@ -11,7 +11,8 @@ import logging
 import os
 import threading
 
-from config import Protocol, config
+from config import Protocol, config, normalize_addr
+from device_cache import DeviceCache
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,16 @@ class DaemonController:
                 logger.error(f"Connect failed: {e}")
                 await self.daemon.resume()
 
+    # ---- Remove ----
+
+    def request_remove(self, address: str) -> dict:
+        """Remove a device from config, clear its cache, and disconnect."""
+        result = config.remove_device(address)
+        if result["removed"]:
+            DeviceCache(config.cache_dir).clear(normalize_addr(address))
+            self.request_disconnect()
+        return result
+
     # ---- Disconnect / Stop ----
 
     def request_disconnect(self, suspend=False):
@@ -214,14 +225,7 @@ class DaemonController:
             try:
                 if suspend:
                     await self.daemon.suspend()
-                    return
-
-                host = self.daemon.host
-                if host and host._is_connection_alive():
-                    await host.connection.disconnect()
                 else:
-                    logger.info("No active connection to disconnect")
-                if self.daemon._host_task and not self.daemon._host_task.done():
-                    self.daemon._host_task.cancel()
+                    await self.daemon.disconnect()
             except Exception as e:
                 logger.error(f"Disconnect failed: {e}")

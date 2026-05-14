@@ -16,7 +16,6 @@ from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
 
 from config import Protocol, config, get_version, normalize_addr
-from device_cache import DeviceCache
 
 __all__ = ['APIServer', 'RequestHandler', 'PORT']
 
@@ -129,10 +128,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "No address provided"})
             return
 
-        result = config.remove_device(address)
+        result = self._controller.request_remove(address)
         if result["removed"]:
-            self._controller.request_disconnect()
-            DeviceCache(config.cache_dir).clear(normalize_addr(address))
             self._send_json({
                 "ok": True,
                 "message": "Device removed",
