@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-Unified Logging Utilities
-
-Provides consistent logging with timestamps, delta tracking,
-and colored output for the BLE HID system.
-
-Author: Lucas Zampieri <lzampier@redhat.com>
-"""
+"""Logging with timestamps, delta tracking, and colored console output."""
 
 import logging
 import time

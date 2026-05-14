@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-UHID Handler
-
-Manages virtual HID devices via Linux UHID interface.
-Allows BLE/Classic HID devices to appear as native Linux input devices.
-
-Author: Lucas Zampieri
-"""
+"""Virtual HID devices via Linux UHID (/dev/uhid)."""
 
 import logging
 import os

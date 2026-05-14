@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-HID Host - Supports both BLE and Classic Bluetooth
-
-Handles mixed-protocol device configurations by running both
-BLE and Classic handlers on a single Bumble Device.
-
-Author: Lucas Zampieri <lzampier@redhat.com>
-"""
+"""HID Host \xe2\x80\x94 runs BLE + Classic handlers on a single Bumble device."""
 
 import asyncio
 from dataclasses import dataclass

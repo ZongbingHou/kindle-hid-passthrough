@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""
-Configuration
-
-Configuration for Kindle HID Passthrough.
-
-Author: Lucas Zampieri <lzampier@redhat.com>
-"""
+"""Configuration for Kindle HID Passthrough."""
 
 import configparser
 import json

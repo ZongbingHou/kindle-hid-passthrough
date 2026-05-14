@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-Bluetooth Scanner
-
-Scans for HID devices across both BLE and Classic protocols simultaneously.
-Uses a single Bumble Device instance to perform both scan types.
-
-Author: Lucas Zampieri <lzampier@redhat.com>
-"""
+"""Bluetooth scanner — discovers HID devices on BLE + Classic concurrently."""
 
 import asyncio
 from dataclasses import dataclass

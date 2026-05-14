@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""
-Kindle HID Passthrough - Daemon
-
-Persistent connection manager for Bluetooth HID devices.
-Maintains connection with auto-reconnect.
-
-For use with init scripts / systemd.
-
-Author: Lucas Zampieri
-"""
+"""Persistent connection manager with auto-reconnect + embedded API server."""
 
 import asyncio
 import logging

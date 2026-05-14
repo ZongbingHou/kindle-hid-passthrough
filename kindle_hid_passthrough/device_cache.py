@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-Device Cache Manager
-
-Handles caching of device data (report descriptors, characteristics, etc.)
-to speed up reconnection for both BLE and Classic Bluetooth HID devices.
-
-Author: Lucas Zampieri <lzampier@redhat.com>
-"""
+"""Per-device cache (HID report descriptors, names) for fast reconnection."""
 
 import json
 import logging
