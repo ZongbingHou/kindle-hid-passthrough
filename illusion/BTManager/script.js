@@ -18,7 +18,6 @@ var BTManager = (function() {
     var confirmAddr = null;
     var lastStatus = null;
     var lastStatusJson = "";
-    var versionSet = false;
     var isScanning = false;
     var isPairing = false;
     var scanPollTimer = null;
@@ -181,9 +180,8 @@ var BTManager = (function() {
 
             renderDeviceLists(data.devices, data.connected_device || null);
 
-            if (!versionSet && data.version) {
+            if (data.version) {
                 getEl("footerVersion").innerHTML = "v" + escapeHtml(data.version);
-                versionSet = true;
             }
 
             lastStatus = data;
