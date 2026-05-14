@@ -21,33 +21,31 @@ if TYPE_CHECKING:
     pass
 
 __version__ = "3.4.0"
+__build_sha__ = None  # stamped by build scripts
 
 
 def _get_git_sha() -> Optional[str]:
     try:
-        sha = subprocess.check_output(
+        return subprocess.check_output(
             ['git', 'rev-parse', '--short', 'HEAD'],
             stderr=subprocess.DEVNULL,
             cwd=os.path.dirname(__file__),
         ).decode().strip()
-        return sha
     except Exception:
         return None
 
 
 def _get_build_sha() -> Optional[str]:
     sha_file = os.path.join(os.path.dirname(__file__), 'BUILD_SHA')
-    if os.path.isfile(sha_file):
-        try:
-            with open(sha_file) as f:
-                return f.read().strip()
-        except Exception:
-            pass
-    return None
+    try:
+        with open(sha_file) as f:
+            return f.read().strip()
+    except Exception:
+        return None
 
 
 def get_version() -> str:
-    sha = _get_git_sha() or _get_build_sha()
+    sha = __build_sha__ or _get_git_sha() or _get_build_sha()
     if sha:
         return f"{__version__}-{sha}"
     return __version__

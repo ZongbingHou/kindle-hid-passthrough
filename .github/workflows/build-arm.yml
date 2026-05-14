@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -39,8 +41,11 @@ jobs:
           dockerfile: .github/Dockerfile.arm
           skip-extraction: ${{ steps.cache-nuitka.outputs.cache-hit }}
 
-      - name: Write build SHA
-        run: git rev-parse --short HEAD > kindle_hid_passthrough/BUILD_SHA
+      - name: Stamp build SHA
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          echo "$SHA" > kindle_hid_passthrough/BUILD_SHA
+          sed -i "s/^__build_sha__ = None/__build_sha__ = \"${SHA}\"/" kindle_hid_passthrough/config.py
 
       - name: Build ARMv7 binary with Docker
         uses: docker/build-push-action@v6
@@ -134,5 +139,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: kindle-hid-passthrough-armv7.tar.gz
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
