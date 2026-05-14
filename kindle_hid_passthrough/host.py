@@ -1,138 +1,32 @@
 #!/usr/bin/env python3
-"""HID Host \xe2\x80\x94 runs BLE + Classic handlers on a single Bumble device."""
+"""HID Host — runs BLE + Classic handlers on a single Bumble device."""
 
 import asyncio
 from dataclasses import dataclass
 from typing import List, Optional
 
-from bumble.core import BT_BR_EDR_TRANSPORT, BT_LE_TRANSPORT, BT_HUMAN_INTERFACE_DEVICE_SERVICE, InvalidStateError, TimeoutError as BumbleTimeoutError
+from bumble.core import BT_BR_EDR_TRANSPORT, BT_HUMAN_INTERFACE_DEVICE_SERVICE, InvalidStateError, TimeoutError as BumbleTimeoutError
 from bumble.device import Device, Peer
 from bumble.gatt import (
-    GATT_DEVICE_NAME_CHARACTERISTIC,
-    GATT_GENERIC_ACCESS_SERVICE,
-    GATT_HID_CONTROL_POINT_CHARACTERISTIC,
     GATT_HUMAN_INTERFACE_DEVICE_SERVICE,
-    GATT_PROTOCOL_MODE_CHARACTERISTIC,
     GATT_REPORT_CHARACTERISTIC,
     GATT_REPORT_MAP_CHARACTERISTIC,
-    GATT_REPORT_REFERENCE_DESCRIPTOR,
 )
-from bumble.hci import (
-    Address,
-    HCI_LE_Add_Device_To_Filter_Accept_List_Command,
-    HCI_LE_Clear_Filter_Accept_List_Command,
-    HCI_LE_Create_Connection_Cancel_Command,
-    HCI_LE_Create_Connection_Command,
-    HCI_Reset_Command,
-    HCI_Write_Class_Of_Device_Command,
-    HCI_Write_Local_Name_Command,
-    HCI_Write_Scan_Enable_Command,
-    OwnAddressType,
-)
-from bumble.hid import HID_CONTROL_PSM, HID_INTERRUPT_PSM
+from bumble.hci import Address, HCI_Reset_Command, HCI_Write_Class_Of_Device_Command, HCI_Write_Local_Name_Command, OwnAddressType
 from bumble.hid import Host as BumbleHIDHost
-from bumble.keys import JsonKeyStore
-from bumble.pairing import PairingConfig, PairingDelegate
 from bumble.sdp import Client as SDPClient
 from bumble.transport import open_transport
 
+from ble import BLEMixin
+from classic import ClassicMixin
 from config import Protocol, config, get_version, normalize_addr
 from device_cache import DeviceCache
 from logging_utils import log
+from pairing import create_keystore, create_pairing_config
 from uhid_handler import Bus, UHIDDevice, strip_digitizer_collections
 
 __all__ = ['HIDHost']
 
-# HID Report Types
-HID_REPORT_TYPE_INPUT = 1
-
-FALLBACK_HID_DESCRIPTOR = bytes([
-    0x05, 0x01,        # Usage Page (Generic Desktop)
-    0x09, 0x05,        # Usage (Gamepad)
-    0xa1, 0x01,        # Collection (Application)
-    0x85, 0x01,        #   Report ID (1)
-    0x05, 0x01,        #   Usage Page (Generic Desktop)
-    0x09, 0x30,        #   Usage (X)
-    0x09, 0x31,        #   Usage (Y)
-    0x09, 0x32,        #   Usage (Z)
-    0x09, 0x35,        #   Usage (Rz)
-    0x16, 0x00, 0x00,  #   Logical Minimum (0)
-    0x26, 0xff, 0xff,  #   Logical Maximum (65535)
-    0x75, 0x10,        #   Report Size (16)
-    0x95, 0x04,        #   Report Count (4)
-    0x81, 0x02,        #   Input (Data, Variable, Absolute)
-    0x05, 0x02,        #   Usage Page (Simulation Controls)
-    0x09, 0xc5,        #   Usage (Brake)
-    0x09, 0xc4,        #   Usage (Accelerator)
-    0x16, 0x00, 0x00,  #   Logical Minimum (0)
-    0x26, 0xff, 0x03,  #   Logical Maximum (1023)
-    0x75, 0x10,        #   Report Size (16)
-    0x95, 0x02,        #   Report Count (2)
-    0x81, 0x02,        #   Input (Data, Variable, Absolute)
-    0x05, 0x01,        #   Usage Page (Generic Desktop)
-    0x09, 0x39,        #   Usage (Hat Switch)
-    0x15, 0x01,        #   Logical Minimum (1)
-    0x25, 0x08,        #   Logical Maximum (8)
-    0x35, 0x00,        #   Physical Minimum (0)
-    0x46, 0x3b, 0x01,  #   Physical Maximum (315)
-    0x65, 0x14,        #   Unit (Degrees)
-    0x75, 0x08,        #   Report Size (8)
-    0x95, 0x01,        #   Report Count (1)
-    0x81, 0x42,        #   Input (Data, Variable, Null State)
-    0x05, 0x09,        #   Usage Page (Button)
-    0x19, 0x01,        #   Usage Minimum (1)
-    0x29, 0x10,        #   Usage Maximum (16)
-    0x15, 0x00,        #   Logical Minimum (0)
-    0x25, 0x01,        #   Logical Maximum (1)
-    0x75, 0x01,        #   Report Size (1)
-    0x95, 0x10,        #   Report Count (16)
-    0x81, 0x02,        #   Input (Data, Variable, Absolute)
-    0xc0,              # End Collection
-])
-
-
-# ==================== PAIRING UTILITIES ====================
-
-class AutoAcceptPairingDelegate(PairingDelegate):
-    """Pairing delegate that auto-accepts all pairing requests."""
-
-    def __init__(self):
-        super().__init__(
-            io_capability=PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT
-        )
-
-    async def accept(self):
-        log.success("Pairing request received - accepting")
-        return True
-
-    async def compare_numbers(self, number, digits):
-        log.warning(f"Confirm number: {number:0{digits}}")
-        log.warning("Auto-accepting (press Ctrl+C to cancel)")
-        return True
-
-    async def get_number(self):
-        return 0
-
-    async def display_number(self, number, digits):
-        log.info(f"Display PIN: {number:0{digits}}")
-
-
-def create_pairing_config() -> PairingConfig:
-    """Create pairing configuration with secure defaults."""
-    return PairingConfig(
-        sc=True,       # Secure Connections
-        mitm=True,     # MITM protection
-        bonding=True,  # Enable bonding (save keys)
-        delegate=AutoAcceptPairingDelegate(),
-    )
-
-
-def create_keystore(path: str) -> JsonKeyStore:
-    """Create a JSON-based key store for bonding keys."""
-    return JsonKeyStore(namespace=None, filename=path)
-
-
-# ==================== DATA CLASSES ====================
 
 @dataclass
 class DeviceConfig:
@@ -142,69 +36,49 @@ class DeviceConfig:
     name: Optional[str] = None
 
 
-class HIDHost:
+class HIDHost(ClassicMixin, BLEMixin):
     """HID Host supporting both BLE and Classic Bluetooth.
 
-    This host:
-    1. Parses device configs and groups by protocol
-    2. Creates a single Bumble Device with both protocols enabled
-    3. Runs handlers concurrently:
-       - Classic: page scan (passive) + active connection attempts
-       - BLE: scan for known addresses and connect
-    4. First successful connection wins
-    5. Creates UHID device and forwards reports
+    Protocol-specific handlers live in ClassicMixin and BLEMixin.
+    This class owns init, start, run, pairing dispatch, and cleanup.
     """
 
     PROTOCOL_NAME = "HID"
 
-    # Active connection timing
     ACTIVE_DELAY = 2.0
     ACTIVE_RETRY_INTERVAL = 5.0
-    ACTIVE_CONNECT_TIMEOUT = 10  # In 0.5s increments
+    ACTIVE_CONNECT_TIMEOUT = 10
 
     def __init__(self, transport_spec: str = None):
-        """Initialize HID Host.
-
-        Args:
-            transport_spec: HCI transport (default: from config)
-        """
         self.transport_spec = transport_spec or config.transport
         self.transport = None
         self.device = None
         self.connection = None
-        self.peer = None  # For BLE
+        self.peer = None
 
-        # Protocol-specific
-        self.hid_host = None  # For Classic
+        self.hid_host = None
         self.connected_protocol = None
 
-        # Connection-handler tasks; cleanup() cancels them so they don't
-        # run past teardown and dereference torn-down state.
         self._connection_tasks: set = set()
 
-        # Device state
         self.current_device_address = None
         self.device_name = None
         self.report_map: Optional[bytes] = None
-        self.hid_reports = {}  # For BLE
+        self.hid_reports = {}
 
-        # Device configs
         self.classic_devices: List[DeviceConfig] = []
         self.ble_devices: List[DeviceConfig] = []
         self._keystore_addresses: set = set()
 
-        # Components
         self.keystore = create_keystore(config.pairing_keys_file)
         self.device_cache = DeviceCache(config.cache_dir)
 
-        # UHID
         self.uhid_device = None
 
-        # Events
         self._disconnection_event = None
         self._connection_future = None
         self._last_report = None
-        self._auth_failure_address = None  # Track address for auth failure retry
+        self._auth_failure_address = None
 
     @property
     def connection_state(self) -> dict:
@@ -312,6 +186,7 @@ class HIDHost:
         # Load keystore addresses
         await self._load_keystore_addresses()
 
+
     async def _load_keystore_addresses(self):
         """Load addresses from keystore for connection filtering."""
         self._keystore_addresses = set()
@@ -343,14 +218,12 @@ class HIDHost:
         self._parse_devices()
         await self.start()
 
-        # Load cached descriptors
         for dev in self.classic_devices + self.ble_devices:
             if dev.address != '*':
                 cache = self.device_cache.load(dev.address)
                 if cache and 'report_map' in cache:
                     log.info(f"Cached descriptor for {self._format_device(dev.address)}")
 
-        # Start protocol handlers
         tasks = []
 
         if self.classic_devices:
@@ -372,13 +245,11 @@ class HIDHost:
         log.info(f"Waiting for connection (Classic: {len(self.classic_devices)}, BLE: {len(self.ble_devices)})")
 
         try:
-            # Wait for first connection
             await asyncio.wait_for(self._connection_future, timeout=60.0)
         except asyncio.TimeoutError:
             log.warning("Connection timeout - no device connected")
             raise InvalidStateError("No device connected within timeout")
         finally:
-            # Cancel remaining tasks
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -387,7 +258,6 @@ class HIDHost:
                     except asyncio.CancelledError:
                         pass
 
-        # Connection established - now handle based on protocol
         if self.connected_protocol == Protocol.CLASSIC:
             await self._handle_classic_connection()
         else:
@@ -496,25 +366,16 @@ class HIDHost:
                     log.error(f"[Classic] Max auth retries ({max_auth_retries}) reached, giving up")
                 break
 
+
     # ==================== PAIRING ====================
 
     async def pair_device(self, address: str, protocol: Protocol = None) -> bool:
-        """Pair with a device (first-time setup).
-
-        Args:
-            address: Device address to pair with
-            protocol: Protocol to use (BLE or CLASSIC)
-
-        Returns:
-            True if pairing successful
-        """
+        """Pair with a device (first-time setup)."""
         if protocol is None:
-            # Try to determine from devices.conf or default to BLE
             protocol = Protocol.BLE
 
         self._parse_devices()
 
-        # Override device lists to only include the target
         if protocol == Protocol.CLASSIC:
             self.classic_devices = [DeviceConfig(address=address, protocol=protocol)]
             self.ble_devices = []
@@ -554,7 +415,6 @@ class HIDHost:
             await self.connection.pair()
             log.success("[BLE] Pairing complete!")
 
-            # Discover and cache HID data
             await self._discover_ble_hid_service()
 
             return True
@@ -570,12 +430,7 @@ class HIDHost:
             return False
 
     async def _discover_ble_hid_service(self, process_reports: bool = False):
-        """Discover BLE GATT HID service and cache descriptor.
-
-        Args:
-            process_reports: If True, also discover report characteristics
-                for subscribing to notifications (used during connection).
-        """
+        """Discover BLE GATT HID service and cache descriptor."""
         await self.peer.discover_services()
 
         if not self.device_name:
@@ -633,7 +488,6 @@ class HIDHost:
         self.current_device_address = address
         self.connected_protocol = Protocol.CLASSIC
 
-        # Track link key generation
         link_key_received = asyncio.Event()
 
         def on_device_link_key(_bd_addr, link_key, key_type):
@@ -643,7 +497,6 @@ class HIDHost:
         self.device.host.on('link_key', on_device_link_key)
 
         try:
-            # Authenticate (triggers SSP pairing if no link key exists)
             log.info("[Classic] Authenticating...")
             try:
                 await asyncio.wait_for(self.connection.authenticate(), timeout=30.0)
@@ -651,7 +504,6 @@ class HIDHost:
             except Exception as e:
                 log.warning(f"[Classic] Authentication: {e}")
 
-            # Wait for link key
             log.info("[Classic] Waiting for link key...")
             try:
                 await asyncio.wait_for(link_key_received.wait(), timeout=5.0)
@@ -659,7 +511,6 @@ class HIDHost:
             except asyncio.TimeoutError:
                 log.warning("[Classic] Link key event timeout (may already be saved)")
 
-            # Request encryption if not already encrypted
             if not self.connection.is_encrypted:
                 log.info("[Classic] Requesting encryption...")
                 try:
@@ -670,10 +521,8 @@ class HIDHost:
                 except Exception as e:
                     log.warning(f"[Classic] Encryption: {e}")
 
-            # Query SDP for report descriptor
             await self._query_classic_sdp(address)
 
-            # Verify link key was saved
             if self.keystore:
                 keys = await self.keystore.get(address)
                 if keys and keys.link_key:
@@ -696,11 +545,7 @@ class HIDHost:
             return False
 
     async def _query_classic_sdp(self, address: str = None):
-        """Query SDP for HID descriptor and cache it.
-
-        Args:
-            address: Device address for caching. Defaults to current_device_address.
-        """
+        """Query SDP for HID descriptor and cache it."""
         if not self.connection:
             return
 
@@ -745,23 +590,15 @@ class HIDHost:
             log.warning(f"[Classic] SDP query failed: {e}")
 
     async def continue_after_pairing(self):
-        """Continue into run mode after successful pairing.
-
-        Uses the existing connection from pair_device() to establish
-        HID channels and start receiving reports.
-        """
+        """Continue into run mode after successful pairing."""
         if not self.connected_protocol:
             raise InvalidStateError("No paired device - call pair_device first")
 
-        # Classic requires an active connection from pair_device().
-        # BLE will reconnect in _continue_ble_after_pairing().
         if self.connected_protocol == Protocol.CLASSIC and not self.connection:
             raise InvalidStateError("No connection - call pair_device first")
 
         self._disconnection_event = asyncio.Event()
 
-        # Only set listener if connection exists (Classic).
-        # BLE will set it after reconnecting in _continue_ble_after_pairing().
         if self.connection:
             self.connection.on('disconnection', self._on_disconnection)
 
@@ -777,7 +614,6 @@ class HIDHost:
 
     async def _continue_classic_after_pairing(self):
         """Continue Classic connection after pairing."""
-        # Create HID Host and register connection
         self.hid_host = BumbleHIDHost(self.device)
         self.hid_host.on(BumbleHIDHost.EVENT_INTERRUPT_DATA, self._on_classic_interrupt_data)
         self.hid_host.on(BumbleHIDHost.EVENT_VIRTUAL_CABLE_UNPLUG, self._on_virtual_cable_unplug)
@@ -785,7 +621,6 @@ class HIDHost:
 
         self.hid_host.on_device_connection(self.connection)
 
-        # Connect HID channels
         log.info("[Classic] Connecting to HID control channel...")
         try:
             await asyncio.wait_for(self.hid_host.connect_control_channel(), timeout=5.0)
@@ -808,7 +643,6 @@ class HIDHost:
 
     async def _continue_ble_after_pairing(self):
         """Continue BLE connection after pairing."""
-        # Reuse existing connection if available (from pair_ble)
         if not self.connection:
             log.info(f"[BLE] Reconnecting to {self.current_device_address}...")
             target = Address(self.current_device_address)
@@ -819,7 +653,6 @@ class HIDHost:
             )
             self.peer = Peer(self.connection)
             self.connection.on('disconnection', self._on_disconnection)
-            # Fresh connection needs encryption restored
             await self._ble_restore_or_pair()
         else:
             log.info("[BLE] Using existing connection from pairing")
@@ -829,283 +662,19 @@ class HIDHost:
 
         await self._setup_ble_hid()
 
-    # ==================== CLASSIC HANDLER ====================
+    # ==================== COMMON ====================
 
-    async def _run_classic_handler(self):
-        """Handle Classic Bluetooth connections."""
-        # Remove old listener if exists (from previous handler instance)
-        if hasattr(self, '_classic_connection_listener') and self._classic_connection_listener:
-            try:
-                self.device.remove_listener('connection', self._classic_connection_listener)
-            except Exception:
-                pass
-            self._classic_connection_listener = None
+    def _on_disconnection(self, reason):
+        """Handle device disconnection."""
+        proto = self.connected_protocol.value.upper() if self.connected_protocol else "Unknown"
+        addr = self.current_device_address or "unknown"
+        log.warning(f"[{proto}] Device disconnected: {addr} (reason={reason})")
 
-        # Create HID Host for L2CAP
-        self.hid_host = BumbleHIDHost(self.device)
-        self.hid_host.on(BumbleHIDHost.EVENT_INTERRUPT_DATA, self._on_classic_interrupt_data)
-        self.hid_host.on(BumbleHIDHost.EVENT_VIRTUAL_CABLE_UNPLUG, self._on_virtual_cable_unplug)
-        log.info(f"[Classic] HID Host ready (PSM 0x{HID_CONTROL_PSM:04X}, 0x{HID_INTERRUPT_PSM:04X})")
+        if reason == 5 and self.current_device_address and proto == "CLASSIC":
+            log.info("[Classic] Authentication failure - will clear stale key and retry")
+            self._auth_failure_address = self.current_device_address
 
-        # Enable Page Scan
-        log.info("[Classic] Enabling Page Scan...")
-        await self.device.host.send_command(
-            HCI_Write_Scan_Enable_Command(scan_enable=0x02),
-            check_result=True
-        )
-
-        # Connection handler
-        async def on_classic_connection(connection):
-            if self._connection_future.done():
-                log.info("[Classic] Connection received but another protocol won")
-                try:
-                    await connection.disconnect()
-                except Exception:
-                    pass
-                return
-
-            # Guard against stale listener firing before hid_host is ready
-            if not self.hid_host:
-                log.warning("[Classic] Connection received but hid_host not ready, ignoring")
-                try:
-                    await connection.disconnect()
-                except Exception:
-                    pass
-                return
-
-            addr_str = str(connection.peer_address)
-            log.info(f"[Classic] Device connected: {self._format_device(addr_str)}")
-
-            # Check if allowed
-            if not self._is_classic_allowed(addr_str):
-                log.warning(f"[Classic] Rejecting {addr_str} (not allowed)")
-                try:
-                    await connection.disconnect()
-                except Exception:
-                    pass
-                return
-
-            self.connection = connection
-            self.current_device_address = addr_str
-            self.connected_protocol = Protocol.CLASSIC
-            connection.on('disconnection', self._on_disconnection)
-
-            # Register with HID host
-            self.hid_host.on_device_connection(connection)
-
-            # Wait for device to authenticate us (don't initiate - causes collision)
-            auth_event = asyncio.Event()
-
-            def on_auth():
-                log.success("[Classic] Device authenticated us")
-                auth_event.set()
-
-            def on_auth_fail(error):
-                log.warning(f"[Classic] Auth failed: {error}")
-                auth_event.set()
-
-            connection.on('connection_authentication', on_auth)
-            connection.on('connection_authentication_failure', on_auth_fail)
-
-            log.info("[Classic] Waiting for device authentication...")
-            try:
-                await asyncio.wait_for(auth_event.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                log.warning("[Classic] No auth request from device, continuing...")
-
-            try:
-                connection.remove_listener('connection_authentication', on_auth)
-                connection.remove_listener('connection_authentication_failure', on_auth_fail)
-            except Exception:
-                pass
-
-            # Check if we got disconnected during auth
-            if self._disconnection_event.is_set():
-                log.warning("[Classic] Connection lost during authentication")
-                return
-
-            # Wait for HID channels
-            log.info("[Classic] Waiting for HID channels...")
-            for _ in range(30):
-                # Check for disconnection during wait
-                if self._disconnection_event.is_set():
-                    log.warning("[Classic] Connection lost while waiting for HID channels")
-                    return
-                if self.hid_host.l2cap_intr_channel and self.hid_host.l2cap_ctrl_channel:
-                    log.success("[Classic] HID channels opened")
-                    break
-                await asyncio.sleep(0.1)
-
-            # Check again after loop
-            if self._disconnection_event.is_set():
-                log.warning("[Classic] Connection lost during HID setup")
-                return
-
-            # Fallback: connect channels ourselves
-            if not self.hid_host.l2cap_ctrl_channel:
-                try:
-                    await asyncio.wait_for(self.hid_host.connect_control_channel(), timeout=5.0)
-                except Exception:
-                    pass
-
-            if not self.hid_host.l2cap_intr_channel:
-                try:
-                    await asyncio.wait_for(self.hid_host.connect_interrupt_channel(), timeout=5.0)
-                except Exception:
-                    pass
-
-            # Final check: only signal success if connection is still alive and HID channels are ready
-            if self._disconnection_event.is_set():
-                log.warning("[Classic] Connection lost during channel setup")
-                return
-
-            if not self.hid_host.l2cap_intr_channel:
-                log.warning("[Classic] HID interrupt channel failed to connect")
-                return
-
-            if not self._connection_future.done():
-                self._connection_future.set_result(connection)
-
-        def on_connection_event(connection):
-            # Only handle Classic connections here
-            is_classic = (hasattr(connection, 'transport')
-                          and connection.transport == BT_BR_EDR_TRANSPORT) \
-                          or not hasattr(connection, 'transport')
-            if not is_classic:
-                return
-            task = asyncio.create_task(on_classic_connection(connection))
-            self._connection_tasks.add(task)
-            task.add_done_callback(self._connection_tasks.discard)
-
-        # Store reference so we can remove it on handler restart
-        self._classic_connection_listener = on_connection_event
-        self.device.on('connection', on_connection_event)
-
-        # Active connection loop
-        active_addresses = [d.address for d in self.classic_devices if d.address != '*']
-        if active_addresses:
-            await self._classic_active_connect_loop(active_addresses)
-
-    def _is_classic_allowed(self, addr_str: str) -> bool:
-        """Check if Classic address is allowed."""
-        norm_addr = normalize_addr(addr_str)
-
-        # Check devices.conf
-        for dev in self.classic_devices:
-            if dev.address == '*':
-                return True
-            if dev.address == norm_addr:
-                return True
-
-        # Check keystore
-        if norm_addr in self._keystore_addresses:
-            return True
-
-        return False
-
-    async def _classic_active_connect_loop(self, addresses: List[str]):
-        """Actively try to connect to Classic devices."""
-        log.info(f"[Classic] Active: {len(addresses)} device(s)")
-        await asyncio.sleep(self.ACTIVE_DELAY)
-
-        attempt = 0
-        while not self._connection_future.done():
-            attempt += 1
-            for addr in addresses:
-                if self._connection_future.done():
-                    return
-
-                log.info(f"[Classic] Attempt {attempt}: {self._format_device(addr)}")
-
-                try:
-                    target = Address(addr, Address.PUBLIC_DEVICE_ADDRESS)
-                    connect_task = asyncio.create_task(
-                        self.device.connect(target, transport=BT_BR_EDR_TRANSPORT)
-                    )
-
-                    for _ in range(self.ACTIVE_CONNECT_TIMEOUT):
-                        if self._connection_future.done():
-                            connect_task.cancel()
-                            return
-
-                        done, _ = await asyncio.wait([connect_task], timeout=0.5)
-                        if done:
-                            break
-
-                    if not connect_task.done():
-                        log.info(f"[Classic] {addr} timed out")
-                        connect_task.cancel()
-                        try:
-                            await connect_task
-                        except asyncio.CancelledError:
-                            pass
-                        await asyncio.sleep(3.0)
-                        continue
-
-                    # Task completed - connection event handler will process it
-                    await connect_task
-
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    if "DISALLOWED" in str(e) or "PENDING" in str(e):
-                        log.warning("[Classic] HCI busy, waiting...")
-                        await asyncio.sleep(5.0)
-                    else:
-                        log.info(f"[Classic] Connect failed: {e}")
-                        await asyncio.sleep(2.0)
-
-            if not self._connection_future.done():
-                await asyncio.sleep(self.ACTIVE_RETRY_INTERVAL)
-
-    def _finalize_classic_hid(self):
-        """Apply fallback descriptor if needed and create UHID. Common to connect and post-pair."""
-        if not self.report_map:
-            self.report_map = FALLBACK_HID_DESCRIPTOR
-            log.warning("[Classic] Using fallback descriptor")
-        self._create_uhid_device()
-
-    async def _handle_classic_connection(self):
-        """Finalize Classic connection setup."""
-        if not self.hid_host.l2cap_intr_channel:
-            raise InvalidStateError("HID interrupt channel not connected")
-
-        if not self._load_cached_descriptor():
-            await self._query_classic_sdp()
-
-        self._finalize_classic_hid()
-
-    def _parse_hid_descriptor_list(self, data_element):
-        """Parse HID Descriptor List from SDP."""
-        try:
-            if hasattr(data_element, 'value'):
-                data_element = data_element.value
-
-            if isinstance(data_element, (list, tuple)):
-                for descriptor in data_element:
-                    if hasattr(descriptor, 'value'):
-                        descriptor = descriptor.value
-
-                    if isinstance(descriptor, (list, tuple)) and len(descriptor) >= 2:
-                        desc_type = descriptor[0]
-                        desc_data = descriptor[1]
-
-                        if hasattr(desc_type, 'value'):
-                            desc_type = desc_type.value
-
-                        if desc_type == 0x22:  # Report Descriptor
-                            if hasattr(desc_data, 'value'):
-                                desc_data = desc_data.value
-
-                            if isinstance(desc_data, bytes):
-                                self.report_map = desc_data
-                            elif isinstance(desc_data, (list, tuple)):
-                                self.report_map = bytes(desc_data)
-
-                            log.success(f"[Classic] Got descriptor: {len(self.report_map)} bytes")
-                            return
-        except Exception as e:
-            log.warning(f"[Classic] Failed to parse descriptor: {e}")
+        self._disconnection_event.set()
 
     def _forward_report(self, data: bytes):
         """Deduplicate, log, and forward an HID report to UHID."""
@@ -1117,348 +686,6 @@ class HIDHost:
                 self.uhid_device.send_input(data)
             except Exception as e:
                 log.warning(f"UHID send failed: {e}")
-
-    def _on_classic_interrupt_data(self, pdu: bytes):
-        """Handle Classic HID report."""
-        if len(pdu) < 1:
-            return
-        self._forward_report(pdu[1:])
-
-    def _on_virtual_cable_unplug(self):
-        """Handle virtual cable unplug."""
-        log.warning("[Classic] Virtual cable unplugged")
-        self._disconnection_event.set()
-
-    # ==================== BLE HANDLER ====================
-
-    async def _run_ble_handler(self):
-        """Handle BLE connections.
-
-        For known addresses: uses the HCI filter accept list so the controller
-        catches both directed and undirected advertising from bonded devices.
-        For wildcard '*': falls back to active scanning for discovery.
-        """
-        known_addresses = [dev.address for dev in self.ble_devices if dev.address != '*']
-        has_wildcard = any(dev.address == '*' for dev in self.ble_devices)
-
-        if known_addresses:
-            await self._run_ble_accept_list_handler(known_addresses)
-        elif has_wildcard:
-            await self._run_ble_scan_handler(set())
-
-    async def _run_ble_accept_list_handler(self, addresses: list):
-        """Wait for BLE connections using the filter accept list.
-
-        Puts the controller in the initiating state with all known addresses
-        on the filter accept list. This catches both directed advertising
-        (peripheral-initiated reconnection) and undirected advertising.
-        """
-        # Set up filter accept list
-        await self.device.send_command(
-            HCI_LE_Clear_Filter_Accept_List_Command(), check_result=True)
-
-        for addr_str in addresses:
-            target = Address(addr_str)
-            await self.device.send_command(
-                HCI_LE_Add_Device_To_Filter_Accept_List_Command(
-                    address_type=target.address_type,
-                    address=target,
-                ), check_result=True)
-
-        log.info(f"[BLE] Waiting for {len(addresses)} device(s) (accept list)")
-
-        # Listen for connection events from Bumble's event system
-        pending = asyncio.get_running_loop().create_future()
-
-        def on_connection(connection):
-            if connection.transport == BT_LE_TRANSPORT and not pending.done():
-                pending.set_result(connection)
-
-        def on_failure(error):
-            if not pending.done():
-                pending.set_exception(error)
-
-        self.device.on(Device.EVENT_CONNECTION, on_connection)
-        self.device.on(Device.EVENT_CONNECTION_FAILURE, on_failure)
-
-        try:
-            # Tell Bumble we're in the initiating state
-            self.device.connect_own_address_type = OwnAddressType.PUBLIC
-            self.device.le_connecting = True
-
-            # Issue create connection with filter accept list policy
-            await self.device.send_command(
-                HCI_LE_Create_Connection_Command(
-                    le_scan_interval=96,        # 60ms / 0.625
-                    le_scan_window=96,           # 60ms / 0.625
-                    initiator_filter_policy=1,   # Use filter accept list
-                    peer_address_type=0,         # Ignored when filter_policy=1
-                    peer_address=Address.ANY,    # Ignored when filter_policy=1
-                    own_address_type=OwnAddressType.PUBLIC,
-                    connection_interval_min=12,  # 15ms / 1.25
-                    connection_interval_max=24,  # 30ms / 1.25
-                    max_latency=0,
-                    supervision_timeout=72,      # 720ms / 10
-                    min_ce_length=0,
-                    max_ce_length=0,
-                ), check_result=True)
-
-            # Wait for a device on the accept list to connect
-            connection = await asyncio.shield(pending)
-
-            if self._connection_future.done():
-                await connection.disconnect()
-                return
-
-            addr_str = str(connection.peer_address)
-            log.info(f"[BLE] Device connected: {self._format_device(addr_str)}")
-
-            self.connection = connection
-            self.peer = Peer(connection)
-            self.current_device_address = addr_str
-            self.connected_protocol = Protocol.BLE
-            connection.on('disconnection', self._on_disconnection)
-
-            await self._ble_restore_or_pair()
-
-            if not self._connection_future.done():
-                self._connection_future.set_result(connection)
-
-        except asyncio.CancelledError:
-            # Cancel the pending HCI connection
-            try:
-                await self.device.send_command(
-                    HCI_LE_Create_Connection_Cancel_Command())
-            except Exception:
-                pass
-            raise
-        except Exception as e:
-            log.warning(f"[BLE] Accept list connection failed: {e}")
-            try:
-                await self.device.send_command(
-                    HCI_LE_Create_Connection_Cancel_Command())
-            except Exception:
-                pass
-        finally:
-            self.device.le_connecting = False
-            self.device.remove_listener(Device.EVENT_CONNECTION, on_connection)
-            self.device.remove_listener(Device.EVENT_CONNECTION_FAILURE, on_failure)
-
-    async def _run_ble_scan_handler(self, target_addresses: set):
-        """Fallback BLE handler using active scanning for discovery."""
-        log.info("[BLE] Scanning for devices...")
-
-        while not self._connection_future.done():
-            found_device = None
-
-            def on_advertisement(advertisement):
-                nonlocal found_device
-                if self._connection_future.done():
-                    return
-
-                addr = normalize_addr(str(advertisement.address))
-                if not target_addresses or addr in target_addresses:
-                    found_device = advertisement
-                    log.info(f"[BLE] Found target: {addr}")
-
-            self.device.on('advertisement', on_advertisement)
-
-            try:
-                await self.device.start_scanning()
-                for _ in range(20):  # 10 seconds
-                    if found_device or self._connection_future.done():
-                        break
-                    await asyncio.sleep(0.5)
-                await self.device.stop_scanning()
-            except Exception as e:
-                log.warning(f"[BLE] Scan error: {e}")
-            finally:
-                self.device.remove_listener('advertisement', on_advertisement)
-
-            if self._connection_future.done():
-                return
-
-            if found_device:
-                max_attempts = 2
-                for attempt in range(1, max_attempts + 1):
-                    try:
-                        log.info(f"[BLE] Connecting to {found_device.address} (Attempt {attempt}/{max_attempts})...")
-                        self.connection = await self.device.connect(
-                            found_device.address,
-                            own_address_type=OwnAddressType.PUBLIC,
-                            timeout=config.connect_timeout,
-                        )
-
-                        if self._connection_future.done():
-                            await self.connection.disconnect()
-                            return
-
-                        self.peer = Peer(self.connection)
-                        self.current_device_address = str(found_device.address)
-                        self.connected_protocol = Protocol.BLE
-                        self.connection.on('disconnection', self._on_disconnection)
-
-                        await self._ble_restore_or_pair()
-
-                        if not self._connection_future.done():
-                            self._connection_future.set_result(self.connection)
-                        return
-
-                    except Exception as e:
-                        log.warning(f"[BLE] Connect attempt {attempt} failed: {e}")
-                        if attempt < max_attempts:
-                            await asyncio.sleep(2.0)
-
-            if not self._connection_future.done():
-                await asyncio.sleep(3.0)
-
-    async def _ble_restore_or_pair(self):
-        """Restore BLE bonding or initiate new pairing."""
-        if self.connection.is_encrypted:
-            log.info("[BLE] Connection already encrypted")
-            return
-
-        if self.device.keystore:
-            try:
-                keys = await self.device.keystore.get(str(self.connection.peer_address))
-                if keys:
-                    log.info("[BLE] Restoring bonding...")
-                    await self.connection.encrypt()
-                    log.success("[BLE] Bonding restored")
-                    return
-            except Exception as e:
-                log.warning(f"[BLE] Bonding restore failed: {e}")
-
-        log.info("[BLE] Initiating pairing...")
-        await self.connection.pair()
-        log.success("[BLE] Pairing complete")
-
-    async def _setup_ble_hid(self):
-        """Discover reports, create UHID, subscribe. Common to connect and post-pair."""
-        if not self.hid_reports:
-            await self._discover_ble_hid_service(process_reports=True)
-        if not self.report_map:
-            raise InvalidStateError("[BLE] No report descriptor available")
-        self._create_uhid_device()
-        await self._subscribe_to_ble_reports()
-        await self._ble_activate_hid_service()
-
-    async def _handle_ble_connection(self):
-        """Finalize BLE connection setup."""
-        self._load_cached_descriptor()
-        await self._setup_ble_hid()
-
-    async def _read_ble_device_name(self):
-        """Read BLE device name from Generic Access Service."""
-        try:
-            for service in self.peer.services:
-                if service.uuid == GATT_GENERIC_ACCESS_SERVICE:
-                    await self.peer.discover_characteristics(service=service)
-                    for char in service.characteristics:
-                        if char.uuid == GATT_DEVICE_NAME_CHARACTERISTIC:
-                            value = await self.peer.read_value(char)
-                            self.device_name = bytes(value).decode('utf-8', errors='replace')
-                            log.info(f"[BLE] Device name: {self.device_name}")
-                            return
-        except Exception as e:
-            log.warning(f"[BLE] Could not read device name: {e}")
-
-    async def _process_ble_report_char(self, char):
-        """Process a BLE Report characteristic."""
-        await self.peer.discover_descriptors(characteristic=char)
-
-        report_id = 0
-        report_type = HID_REPORT_TYPE_INPUT
-
-        for desc in char.descriptors:
-            if desc.type == GATT_REPORT_REFERENCE_DESCRIPTOR:
-                try:
-                    ref = await self.peer.read_value(desc)
-                    if len(ref) >= 2:
-                        report_id = ref[0]
-                        report_type = ref[1]
-                except Exception:
-                    pass
-
-        if report_type == HID_REPORT_TYPE_INPUT:
-            self.hid_reports[report_id] = char
-            log.info(f"[BLE] Found input report {report_id}")
-
-    async def _subscribe_to_ble_reports(self):
-        """Subscribe to BLE HID input report notifications."""
-        for report_id, char in self.hid_reports.items():
-            try:
-                # Use a closure to capture the report_id
-                def make_callback(rid):
-                    return lambda value: self._on_ble_hid_report(value, rid)
-
-                await self.peer.subscribe(char, make_callback(report_id))
-                log.success(f"[BLE] Subscribed to report {report_id}")
-            except Exception as e:
-                log.warning(f"[BLE] Failed to subscribe to report {report_id}: {e}")
-
-    async def _ble_activate_hid_service(self):
-        """Write Exit Suspend to HID Control Point and read Protocol Mode.
-
-        Some BLE keyboards enter a suspended state after reconnection and
-        won't send GATT notifications until the host writes Exit Suspend
-        (0x01) to the HID Control Point characteristic (UUID 0x2A4C).
-        """
-        if not self.peer:
-            log.warning("[BLE] No peer for HID activation")
-            return
-
-        hid_services = [s for s in self.peer.services if s.uuid == GATT_HUMAN_INTERFACE_DEVICE_SERVICE]
-        if not hid_services:
-            log.warning("[BLE] No HID service found for activation")
-            return
-
-        hid_service = hid_services[0]
-        # Ensure characteristics are discovered
-        if not hid_service.characteristics:
-            log.info("[BLE] Discovering characteristics for HID activation...")
-            await self.peer.discover_characteristics(service=hid_service)
-
-        found_cp = False
-        for char in hid_service.characteristics:
-            if char.uuid == GATT_HID_CONTROL_POINT_CHARACTERISTIC:
-                found_cp = True
-                try:
-                    await self.peer.write_value(char, bytes([0x01]), with_response=False)
-                    log.info("[BLE] Wrote Exit Suspend to HID Control Point")
-                except Exception as e:
-                    log.warning(f"[BLE] Failed to write HID Control Point: {e}")
-
-            elif char.uuid == GATT_PROTOCOL_MODE_CHARACTERISTIC:
-                try:
-                    value = await self.peer.read_value(char)
-                    mode = "Report" if bytes(value) == b'\x01' else "Boot"
-                    log.info(f"[BLE] Protocol Mode: {mode}")
-                except Exception as e:
-                    log.warning(f"[BLE] Failed to read Protocol Mode: {e}")
-
-        if not found_cp:
-            log.info(f"[BLE] No HID Control Point characteristic (found {len(hid_service.characteristics)} chars)")
-
-    def _on_ble_hid_report(self, value, report_id):
-        """Handle BLE HID report."""
-        # BLE GATT notifications omit Report ID; UHID/kernel expects it first.
-        self._forward_report(bytes([report_id]) + bytes(value))
-
-    # ==================== COMMON ====================
-
-    def _on_disconnection(self, reason):
-        """Handle device disconnection."""
-        proto = self.connected_protocol.value.upper() if self.connected_protocol else "Unknown"
-        addr = self.current_device_address or "unknown"
-        log.warning(f"[{proto}] Device disconnected: {addr} (reason={reason})")
-
-        # Reason 5 = HCI_AUTHENTICATION_FAILURE - likely stale link key
-        if reason == 5 and self.current_device_address and proto == "CLASSIC":
-            log.info("[Classic] Authentication failure - will clear stale key and retry")
-            self._auth_failure_address = self.current_device_address
-
-        self._disconnection_event.set()
 
     def _load_cached_descriptor(self, address: str = None) -> bool:
         """Load report descriptor and device name from cache. Returns True if found."""
@@ -1500,14 +727,12 @@ class HIDHost:
             return False
         if not hasattr(self.connection, 'handle') or self.connection.handle is None:
             return False
-        # Check if connection is already disconnected
         if hasattr(self.connection, 'is_disconnected') and self.connection.is_disconnected:
             return False
         return True
 
     async def cleanup(self):
         """Clean up resources."""
-        # Cancel connection handlers before nulling shared state below.
         if self._connection_tasks:
             pending = list(self._connection_tasks)
             for task in pending:
@@ -1526,7 +751,6 @@ class HIDHost:
                 pass
             self.uhid_device = None
 
-        # Classic cleanup
         if self.hid_host:
             if self._is_connection_alive():
                 if self.hid_host.l2cap_intr_channel:
@@ -1541,17 +765,14 @@ class HIDHost:
                         pass
             self.hid_host = None
 
-        # Disconnect - only if connection is actually still alive
         if self._is_connection_alive():
             try:
                 await self.connection.disconnect()
             except Exception as e:
-                # Ignore errors when connection is already gone
                 log.debug(f"Disconnect cleanup: {e}")
         self.connection = None
         self.peer = None
 
-        # Remove classic connection listener if set
         if hasattr(self, '_classic_connection_listener') and self._classic_connection_listener:
             try:
                 self.device.remove_listener('connection', self._classic_connection_listener)
@@ -1613,11 +834,7 @@ class HIDHost:
         return False
 
     def get_auth_failure_address(self) -> str:
-        """Get address that had auth failure, if any.
-
-        Returns:
-            Address string or None
-        """
+        """Get address that had auth failure, if any."""
         addr = self._auth_failure_address
-        self._auth_failure_address = None  # Clear after reading
+        self._auth_failure_address = None
         return addr
