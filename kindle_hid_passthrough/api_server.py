@@ -140,20 +140,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": f"Device not found: {normalize_addr(address)}"})
 
     def _handle_clear_cache(self):
-        cache_dir = config.cache_dir
-        if not os.path.isdir(cache_dir):
-            self._send_json({"ok": True, "message": "No cache directory", "files_removed": 0})
-            return
-
-        count = 0
-        for fname in os.listdir(cache_dir):
-            if fname.endswith('.json') and fname != 'pairing_keys.json':
-                try:
-                    os.remove(os.path.join(cache_dir, fname))
-                    count += 1
-                except OSError:
-                    pass
-
+        count = self._controller.request_clear_cache()
         self._send_json({"ok": True, "message": "Cache cleared", "files_removed": count})
 
     def _handle_scan(self):

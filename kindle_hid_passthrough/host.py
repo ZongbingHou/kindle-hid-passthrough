@@ -36,7 +36,7 @@ from bumble.pairing import PairingConfig, PairingDelegate
 from bumble.sdp import Client as SDPClient
 from bumble.transport import open_transport
 
-from config import Protocol, config, get_fallback_hid_descriptor, get_version, normalize_addr
+from config import Protocol, config, get_version, normalize_addr
 from device_cache import DeviceCache
 from logging_utils import log
 from uhid_handler import Bus, UHIDDevice, strip_digitizer_collections
@@ -45,6 +45,50 @@ __all__ = ['HIDHost']
 
 # HID Report Types
 HID_REPORT_TYPE_INPUT = 1
+
+FALLBACK_HID_DESCRIPTOR = bytes([
+    0x05, 0x01,        # Usage Page (Generic Desktop)
+    0x09, 0x05,        # Usage (Gamepad)
+    0xa1, 0x01,        # Collection (Application)
+    0x85, 0x01,        #   Report ID (1)
+    0x05, 0x01,        #   Usage Page (Generic Desktop)
+    0x09, 0x30,        #   Usage (X)
+    0x09, 0x31,        #   Usage (Y)
+    0x09, 0x32,        #   Usage (Z)
+    0x09, 0x35,        #   Usage (Rz)
+    0x16, 0x00, 0x00,  #   Logical Minimum (0)
+    0x26, 0xff, 0xff,  #   Logical Maximum (65535)
+    0x75, 0x10,        #   Report Size (16)
+    0x95, 0x04,        #   Report Count (4)
+    0x81, 0x02,        #   Input (Data, Variable, Absolute)
+    0x05, 0x02,        #   Usage Page (Simulation Controls)
+    0x09, 0xc5,        #   Usage (Brake)
+    0x09, 0xc4,        #   Usage (Accelerator)
+    0x16, 0x00, 0x00,  #   Logical Minimum (0)
+    0x26, 0xff, 0x03,  #   Logical Maximum (1023)
+    0x75, 0x10,        #   Report Size (16)
+    0x95, 0x02,        #   Report Count (2)
+    0x81, 0x02,        #   Input (Data, Variable, Absolute)
+    0x05, 0x01,        #   Usage Page (Generic Desktop)
+    0x09, 0x39,        #   Usage (Hat Switch)
+    0x15, 0x01,        #   Logical Minimum (1)
+    0x25, 0x08,        #   Logical Maximum (8)
+    0x35, 0x00,        #   Physical Minimum (0)
+    0x46, 0x3b, 0x01,  #   Physical Maximum (315)
+    0x65, 0x14,        #   Unit (Degrees)
+    0x75, 0x08,        #   Report Size (8)
+    0x95, 0x01,        #   Report Count (1)
+    0x81, 0x42,        #   Input (Data, Variable, Null State)
+    0x05, 0x09,        #   Usage Page (Button)
+    0x19, 0x01,        #   Usage Minimum (1)
+    0x29, 0x10,        #   Usage Maximum (16)
+    0x15, 0x00,        #   Logical Minimum (0)
+    0x25, 0x01,        #   Logical Maximum (1)
+    0x75, 0x01,        #   Report Size (1)
+    0x95, 0x10,        #   Report Count (16)
+    0x81, 0x02,        #   Input (Data, Variable, Absolute)
+    0xc0,              # End Collection
+])
 
 
 # ==================== PAIRING UTILITIES ====================
@@ -1017,7 +1061,7 @@ class HIDHost:
     def _finalize_classic_hid(self):
         """Apply fallback descriptor if needed and create UHID. Common to connect and post-pair."""
         if not self.report_map:
-            self.report_map = get_fallback_hid_descriptor()
+            self.report_map = FALLBACK_HID_DESCRIPTOR
             log.warning("[Classic] Using fallback descriptor")
         self._create_uhid_device()
 

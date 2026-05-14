@@ -84,28 +84,33 @@ class DeviceCache:
             logger.warning(f"Failed to save cache for {address}: {e}")
             return False
 
-    def clear(self, address: Optional[str] = None) -> None:
-        """Clear cache for specific device or all devices
+    def clear(self, address: Optional[str] = None) -> int:
+        """Clear cache for specific device or all devices.
 
         Args:
             address: Device address, or None to clear all
+
+        Returns:
+            Number of cache files removed.
         """
+        count = 0
         if address:
-            # Clear specific device
             cache_path = self._get_cache_path(address)
             try:
                 if os.path.exists(cache_path):
                     os.remove(cache_path)
+                    count = 1
                     logger.info(f"Cleared cache for {address}")
             except Exception as e:
                 logger.warning(f"Failed to clear cache for {address}: {e}")
         else:
-            # Clear all cache files
             try:
                 for filename in os.listdir(self.cache_dir):
-                    if filename.endswith('.json'):
+                    if filename.endswith('.json') and filename != 'pairing_keys.json':
                         os.remove(os.path.join(self.cache_dir, filename))
+                        count += 1
                 logger.info("Cleared all device caches")
             except Exception as e:
                 logger.warning(f"Failed to clear all caches: {e}")
+        return count
 

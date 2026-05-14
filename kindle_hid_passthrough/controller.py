@@ -208,6 +208,12 @@ class DaemonController:
             self.request_disconnect()
         return result
 
+    # ---- Clear Cache ----
+
+    def request_clear_cache(self) -> int:
+        """Clear all descriptor cache files. Returns count of files removed."""
+        return DeviceCache(config.cache_dir).clear()
+
     # ---- Disconnect / Stop ----
 
     def request_disconnect(self, suspend=False):
