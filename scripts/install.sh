@@ -1,16 +1,26 @@
 #!/bin/sh
 
+INSTALL_DIR="/mnt/us/kindle_hid_passthrough"
+
+# True when the script is running from the install dir itself, so the
+# cp commands below would be a no-op (source == destination).
+in_install_dir()
+{
+  [ "$(cd "$(dirname "$0")/.." && pwd)" = "$INSTALL_DIR" ] || \
+    [ "$(pwd)" = "$INSTALL_DIR" ]
+}
+
 installMainFiles()
 {
   echo " -> Installing main program files"
-  mkdir -p /mnt/us/kindle_hid_passthrough/dist
-  mkdir -p /mnt/us/kindle_hid_passthrough/illusion/BTManager
-  mkdir -p /mnt/us/kindle_hid_passthrough/cache
-  cp -r dist/* /mnt/us/kindle_hid_passthrough/dist/
-  cp kindle-hid-passthrough /mnt/us/kindle_hid_passthrough/
-  cp libsyscall_wrapper.so /mnt/us/kindle_hid_passthrough/
-  cp config.ini /mnt/us/kindle_hid_passthrough/
-  chmod +x /mnt/us/kindle_hid_passthrough/kindle-hid-passthrough
+  mkdir -p "$INSTALL_DIR/dist" "$INSTALL_DIR/illusion/BTManager" "$INSTALL_DIR/cache"
+  if ! in_install_dir; then
+    cp -r dist/* "$INSTALL_DIR/dist/"
+    cp kindle-hid-passthrough "$INSTALL_DIR/"
+    cp libsyscall_wrapper.so "$INSTALL_DIR/"
+    cp config.ini "$INSTALL_DIR/"
+  fi
+  chmod +x "$INSTALL_DIR/kindle-hid-passthrough"
   echo " -> Ready."
 }
 
@@ -68,13 +78,15 @@ setLayout()
 installWAFApp()
 {
   echo " -> Installing BTManager app"
-  cp -r illusion/BTManager/* /mnt/us/kindle_hid_passthrough/illusion/BTManager/
-  cp illusion/BTManager.sh /mnt/us/kindle_hid_passthrough/illusion/BTManager.sh
-  cp illusion/install-waf-app.sh /mnt/us/kindle_hid_passthrough/illusion/install-waf-app.sh
-  if [ -f /mnt/us/kindle_hid_passthrough/illusion/install-waf-app.sh ]; then
-    /bin/sh /mnt/us/kindle_hid_passthrough/illusion/install-waf-app.sh
+  if ! in_install_dir; then
+    cp -r illusion/BTManager/* "$INSTALL_DIR/illusion/BTManager/"
+    cp illusion/BTManager.sh "$INSTALL_DIR/illusion/BTManager.sh"
+    cp illusion/install-waf-app.sh "$INSTALL_DIR/illusion/install-waf-app.sh"
+  fi
+  if [ -f "$INSTALL_DIR/illusion/install-waf-app.sh" ]; then
+    /bin/sh "$INSTALL_DIR/illusion/install-waf-app.sh"
   else
-    echo "ERROR: /mnt/us/kindle_hid_passthrough/illusion/install-waf-app.sh not found"
+    echo "ERROR: $INSTALL_DIR/illusion/install-waf-app.sh not found"
   fi
 }
 
@@ -158,6 +170,20 @@ print_menu()
   printf " 9) Uninstall everything\n"
   printf "10) Quit\n"
 }
+
+# Non-interactive entry point: `sh install.sh <action>` runs one action and exits.
+if [ $# -gt 0 ]; then
+  case "$1" in
+    installAll)         installAll; exit 0 ;;
+    installUdevRules)   installUdevRules; exit 0 ;;
+    installUpstart)     installUpstart; exit 0 ;;
+    installMainFiles)   installMainFiles; exit 0 ;;
+    installWAFApp)      installWAFApp; exit 0 ;;
+    installKOReaderPlugin) installKOReaderPlugin; exit 0 ;;
+    uninstallAll)       uninstallAll; exit 0 ;;
+    *) echo "Unknown action: $1" >&2; exit 1 ;;
+  esac
+fi
 
 while :; do
   print_menu

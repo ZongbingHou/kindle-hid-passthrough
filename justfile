@@ -175,49 +175,41 @@ repo := "zampierilucas/kindle-hid-passthrough"
 artifact_name := "kindle-hid-passthrough-armv7"
 tarball_name := "kindle-hid-passthrough-armv7.tar.gz"
 
-# Install a pre-built tarball onto Kindle over SSH
-_install-tarball tarball:
-    @echo "Installing {{tarball}} to Kindle..."
-    @just kill
-    @echo "Remounting filesystems as writable..."
-    ssh kindle "/usr/sbin/mntroot rw && mount -o remount,rw /mnt/base-us"
-    @echo "Extracting files to Kindle..."
-    ssh kindle "mkdir -p {{remote_dir}}"
-    cat {{tarball}} | ssh kindle "tar xzf - -C {{remote_dir}}"
-    @echo "Installing system files..."
-    ssh kindle "cp {{remote_dir}}/assets/hid-passthrough.upstart /etc/upstart/hid-passthrough.conf && \
-        chmod +x {{remote_dir}}/scripts/dev_is_keyboard.sh && \
-        cp {{remote_dir}}/assets/99-hid-keyboard.rules /etc/udev/rules.d/ && \
-        /usr/sbin/udevadm control --reload-rules"
-    @echo "Installing WAF app..."
-    ssh kindle "cd {{remote_dir}} && sh illusion/install-waf-app.sh"
-    @echo "Remounting read-only..."
-    ssh kindle "/usr/sbin/mntroot ro"
-    @echo "Starting daemon..."
-    ssh kindle "/sbin/initctl start hid-passthrough"
-    ssh kindle 'lipc-set-prop com.lab126.appmgrd start app://com.lzampier.btmanager'
-    @echo "Install complete!"
-
-# Install from GitHub release (default: latest)
-install-release version="":
+# Install onto Kindle from a GitHub release (latest, version, or local tarball path)
+install-release source="":
     #!/usr/bin/env bash
     set -euo pipefail
-    tmpdir=$(mktemp -d)
-    trap 'rm -rf "$tmpdir"' EXIT
-    version="{{version}}"
-    if [ -z "$version" ]; then
-        echo "Fetching latest release..."
-        version=$(curl -sfL "https://api.github.com/repos/{{repo}}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+    source="{{source}}"
+    if [ -f "$source" ]; then
+        tarball="$source"
+        echo "Installing from local tarball: $tarball"
+    else
+        tmpdir=$(mktemp -d)
+        trap 'rm -rf "$tmpdir"' EXIT
+        version="$source"
         if [ -z "$version" ]; then
-            echo "ERROR: Could not determine latest release version" >&2
-            exit 1
+            echo "Fetching latest release..."
+            version=$(curl -sfL "https://api.github.com/repos/{{repo}}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+            if [ -z "$version" ]; then
+                echo "ERROR: Could not determine latest release version" >&2
+                exit 1
+            fi
         fi
+        echo "Downloading release $version..."
+        curl -sfL -o "$tmpdir/{{tarball_name}}" \
+            "https://github.com/{{repo}}/releases/download/${version}/{{tarball_name}}"
+        tarball="$tmpdir/{{tarball_name}}"
     fi
-    echo "Downloading release $version..."
-    curl -sfL -o "$tmpdir/{{tarball_name}}" \
-        "https://github.com/{{repo}}/releases/download/${version}/{{tarball_name}}"
-    echo "Downloaded to $tmpdir/{{tarball_name}}"
-    just _install-tarball "$tmpdir/{{tarball_name}}"
+    echo "Installing to Kindle..."
+    just kill
+    ssh kindle "/usr/sbin/mntroot rw && mount -o remount,rw /mnt/base-us"
+    ssh kindle "mkdir -p {{remote_dir}}"
+    cat "$tarball" | ssh kindle "tar xzf - -C {{remote_dir}}"
+    ssh kindle "cd {{remote_dir}} && sh scripts/install.sh installAll"
+    ssh kindle "/usr/sbin/mntroot ro"
+    ssh kindle "/sbin/initctl start hid-passthrough"
+    ssh kindle 'lipc-set-prop com.lab126.appmgrd start app://com.lzampier.btmanager'
+    echo "Install complete!"
 
 # Install from latest CI build artifact
 install-ci branch="main":
@@ -249,7 +241,7 @@ install-ci branch="main":
         ls -la "$tmpdir"/
         exit 1
     fi
-    just _install-tarball "$tarball"
+    just install-release "$tarball"
 
 # Bump __version__, commit to main, tag, and push (usage: just version-bump 3.3.5)
 version-bump version:
