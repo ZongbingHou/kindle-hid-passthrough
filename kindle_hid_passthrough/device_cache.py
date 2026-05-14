@@ -84,32 +84,6 @@ class DeviceCache:
             logger.warning(f"Failed to save cache for {address}: {e}")
             return False
 
-    def update(self, address: str, updates: Dict) -> bool:
-        """Update existing cache with new data
-
-        Args:
-            address: Device address
-            updates: Dictionary of fields to update
-
-        Returns:
-            True if updated successfully, False otherwise
-        """
-        try:
-            # Load existing cache or create new one
-            existing_cache = self.load(address)
-            if not existing_cache:
-                existing_cache = {}
-
-            # Merge updates
-            existing_cache.update(updates)
-
-            # Save back
-            return self.save(address, existing_cache)
-
-        except Exception as e:
-            logger.warning(f"Failed to update cache for {address}: {e}")
-            return False
-
     def clear(self, address: Optional[str] = None) -> None:
         """Clear cache for specific device or all devices
 
