@@ -14,6 +14,7 @@ from bt_setup import prepare_bt
 from config import config, get_version, normalize_addr
 from controller import DaemonController
 from host import HIDHost
+from scanner import Scanner
 from logging_utils import log, setup_daemon_logging
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,31 @@ class HIDDaemon:
             self.host = None
 
         logger.info("Daemon suspended")
+
+    async def scan(self, duration=10.0, on_device_found=None):
+        """Scan for BT devices. Must be called while suspended."""
+        scanner = Scanner()
+        if on_device_found:
+            scanner.on_device_found = on_device_found
+        try:
+            await scanner.start()
+            await scanner.scan(duration=duration)
+        finally:
+            await scanner.cleanup()
+
+    async def pair(self, address, protocol) -> bool:
+        """Pair with a device. Must be called while suspended."""
+        host = HIDHost()
+        try:
+            success = await host.pair_device(address, protocol)
+            if success:
+                self._paired_host = host
+                return True
+            await host.cleanup()
+            return False
+        except Exception:
+            await host.cleanup()
+            raise
 
     async def resume(self):
         """Resume connections after scan/pair."""

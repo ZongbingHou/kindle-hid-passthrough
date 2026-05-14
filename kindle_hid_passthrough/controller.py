@@ -8,10 +8,10 @@ disconnect) from the HTTP server thread via asyncio.run_coroutine_threadsafe().
 
 import asyncio
 import logging
+import os
+import threading
 
 from config import Protocol, config
-from host import HIDHost
-from scanner import Scanner
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +40,21 @@ class DaemonController:
         self.pair_result = None
         self.is_pairing = False
 
+        # Device list cache (mtime-based)
+        self._devices_cache = None
+        self._devices_mtime = 0
+        self._devices_lock = threading.Lock()
+
     def get_status(self) -> dict:
         """Thread-safe read of daemon state. Called from HTTP thread."""
+        devices = self._get_devices_cached()
+
         status = {
             "daemon_running": self.daemon.running and not self.daemon._suspended,
+            "devices": devices,
+            "device_count": len(devices),
+            "scanning": self.is_scanning,
+            "pairing": self.is_pairing,
         }
 
         conn = self.daemon.connection_state
@@ -58,10 +69,30 @@ class DaemonController:
             if conn.get("descriptor_size"):
                 status["descriptor_size"] = conn["descriptor_size"]
 
-        status["scanning"] = self.is_scanning
-        status["pairing"] = self.is_pairing
-
         return status
+
+    def _get_devices_cached(self) -> list:
+        """Device list from devices.conf, cached by file mtime."""
+        try:
+            mtime = os.path.getmtime(config.devices_config_file)
+        except OSError:
+            mtime = 0
+
+        with self._devices_lock:
+            if self._devices_cache is not None and mtime == self._devices_mtime:
+                return self._devices_cache
+
+            devices = config.get_all_devices()
+            self._devices_cache = [
+                {
+                    "address": addr,
+                    "protocol": proto.value,
+                    **({"name": name} if name else {}),
+                }
+                for addr, proto, name in devices
+            ]
+            self._devices_mtime = mtime
+            return self._devices_cache
 
     # ---- Scan ----
 
@@ -89,12 +120,10 @@ class DaemonController:
                 await self.daemon.suspend()
                 config.validate_keystore()
 
-                scanner = Scanner()
-                scanner.on_device_found = self._on_device_found
-                await scanner.start()
-                await scanner.scan(duration=10.0)
-                await scanner.cleanup()
-
+                await self.daemon.scan(
+                    duration=10.0,
+                    on_device_found=self._on_device_found,
+                )
                 self.scan_result = {
                     "ok": True,
                     "devices": self._scan_live_devices,
@@ -120,51 +149,39 @@ class DaemonController:
 
     async def _do_pair(self, address, protocol, name):
         async with self._op_lock:
-            host = None
             try:
                 await self.daemon.suspend()
                 config.validate_keystore()
 
-                host = HIDHost()
-                success = await host.pair_device(address, protocol)
+                success = await self.daemon.pair(address, protocol)
                 if success:
                     config.add_device(address, protocol, name)
-                    self.pair_result = {
-                        "ok": True,
-                        "address": address,
-                        "message": "Paired successfully",
-                    }
-                    # Hand off host to daemon so it continues with the
-                    # active connection instead of scanning from scratch
-                    self.daemon._paired_host = host
-                    host = None  # Daemon owns it now
-                else:
-                    self.pair_result = {
-                        "ok": False,
-                        "address": address,
-                        "error": "Pairing failed",
-                    }
+                self.pair_result = {
+                    "ok": success,
+                    "address": address,
+                    **({"message": "Paired successfully"} if success
+                       else {"error": "Pairing failed"}),
+                }
             except Exception as e:
                 logger.error(f"Pair failed: {e}")
-                self.pair_result = {
-                    "ok": False,
-                    "address": address,
-                    "error": str(e),
-                }
+                self.pair_result = {"ok": False, "address": address, "error": str(e)}
             finally:
-                if host:
-                    await host.cleanup()
                 self.is_pairing = False
                 await self.daemon.resume()
 
-    # ---- Connect ----
+    # ---- Connect / Resume ----
 
-    def request_connect(self, address, protocol_str):
-        """From HTTP thread: schedule connect on event loop.
+    def request_connect(self, address=None, protocol_str=None):
+        """From HTTP thread: connect to a device or resume the daemon.
 
-        Suspends daemon, saves device to config if needed, then resumes
-        so the daemon reconnects to the specified device.
+        With address: suspend → save device to config → resume.
+        Without address: just resume if suspended (used by /start).
         """
+        if not address:
+            if self.daemon._suspended:
+                asyncio.run_coroutine_threadsafe(self.daemon.resume(), self.loop)
+            return
+
         protocol = Protocol.CLASSIC if protocol_str == 'classic' else Protocol.BLE
         asyncio.run_coroutine_threadsafe(
             self._do_connect(address, protocol), self.loop
@@ -174,48 +191,36 @@ class DaemonController:
         async with self._op_lock:
             try:
                 await self.daemon.suspend()
-                # Add device to config if not already there
                 config.add_device(address, protocol)
                 await self.daemon.resume()
             except Exception as e:
                 logger.error(f"Connect failed: {e}")
                 await self.daemon.resume()
 
-    # ---- Resume (for /start endpoint) ----
+    # ---- Disconnect / Stop ----
 
-    def request_connect_resume(self):
-        """From HTTP thread: resume daemon if suspended."""
-        if self.daemon._suspended:
-            asyncio.run_coroutine_threadsafe(self.daemon.resume(), self.loop)
+    def request_disconnect(self, suspend=False):
+        """From HTTP thread: drop connection.
 
-    # ---- Stop ----
+        suspend=False: drop connection, daemon keeps running (reconnect loop).
+        suspend=True:  suspend daemon entirely (/stop).
+        """
+        asyncio.run_coroutine_threadsafe(
+            self._do_disconnect(suspend), self.loop
+        )
 
-    def request_stop(self):
-        """From HTTP thread: stop daemon (suspend, no resume)."""
-        asyncio.run_coroutine_threadsafe(self._do_stop(), self.loop)
-
-    async def _do_stop(self):
+    async def _do_disconnect(self, suspend):
         async with self._op_lock:
             try:
-                await self.daemon.suspend()
-            except Exception as e:
-                logger.error(f"Stop failed: {e}")
+                if suspend:
+                    await self.daemon.suspend()
+                    return
 
-    # ---- Disconnect ----
-
-    def request_disconnect(self):
-        """From HTTP thread: drop connection, daemon keeps running."""
-        asyncio.run_coroutine_threadsafe(self._do_disconnect(), self.loop)
-
-    async def _do_disconnect(self):
-        async with self._op_lock:
-            try:
                 host = self.daemon.host
                 if host and host._is_connection_alive():
                     await host.connection.disconnect()
                 else:
                     logger.info("No active connection to disconnect")
-                # Force daemon.run() to loop back and re-read devices.conf.
                 if self.daemon._host_task and not self.daemon._host_task.done():
                     self.daemon._host_task.cancel()
             except Exception as e:
