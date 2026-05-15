@@ -49,6 +49,9 @@ jobs:
 
       - name: Build ARMv7 binary with Docker
         uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: "false"
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
           file: .github/Dockerfile.arm
@@ -57,8 +60,6 @@ jobs:
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          summary: false
-          record: false
 
       - name: Extract binaries
         run: |
