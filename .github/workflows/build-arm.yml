@@ -42,8 +42,10 @@ jobs:
           skip-extraction: ${{ steps.cache-nuitka.outputs.cache-hit }}
 
       - name: Stamp build SHA
+        env:
+          FULL_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          SHA=$(git rev-parse --short HEAD)
+          SHA=$(git rev-parse --short "$FULL_SHA")
           echo "$SHA" > kindle_hid_passthrough/BUILD_SHA
           sed -i "s/^__build_sha__ = None/__build_sha__ = \"${SHA}\"/" kindle_hid_passthrough/config.py
 
