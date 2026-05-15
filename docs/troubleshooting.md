@@ -66,7 +66,6 @@ These files tell the system that a connected input device is a keyboard. Without
 
 ```bash
 cd /mnt/us/kindle_hid_passthrough
-chmod +x scripts/dev_is_keyboard.sh
 mntroot rw
 cp assets/99-hid-keyboard.rules /etc/udev/rules.d
 udevadm control --reload-rules

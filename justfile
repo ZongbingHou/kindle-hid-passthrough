@@ -36,7 +36,6 @@ deploy:
         illusion/BTManager/* \
         illusion/BTManager.sh \
     ) | ssh kindle "tar xf - -C /"
-    ssh kindle "chmod +x {{remote_dir}}/scripts/dev_is_keyboard.sh"
     -ssh kindle "udevadm control --reload-rules" 2>/dev/null || true
     @echo "Clearing Python bytecode cache..."
     ssh kindle "rm -rf {{remote_dir}}/__pycache__"

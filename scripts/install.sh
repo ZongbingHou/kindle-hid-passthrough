@@ -32,7 +32,6 @@ installAll()
 installUdevRules()
 {
   echo " -> Installing udev rules"
-  chmod +x scripts/dev_is_keyboard.sh
   /usr/sbin/mntroot rw
   cp assets/99-hid-keyboard.rules /etc/udev/rules.d
   /usr/sbin/udevadm control --reload-rules
