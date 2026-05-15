@@ -352,6 +352,7 @@ class TestKindleDetectTransport:
         assert hw['transport_scheme'] == 'serial'
         assert hw['device_path'] == '/dev/ttymxc2'
         assert hw['baud_rate'] == 115200
+        assert hw['flow_control'] == 'rtscts'
         assert hw['firmware_dir'] == '/opt/brcm_4343w/bluetooth/firmware'
 
     def test_mtk_transport_string(self):

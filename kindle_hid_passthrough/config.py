@@ -139,6 +139,8 @@ class Config:
         if defaults:
             if defaults.transport_scheme == 'serial':
                 transport = f'serial:{defaults.device_path},{defaults.baud_rate}'
+                if defaults.flow_control:
+                    transport += f',{defaults.flow_control}'
             else:
                 transport = f'file:{defaults.device_path}'
             if os.path.exists(defaults.device_path):
