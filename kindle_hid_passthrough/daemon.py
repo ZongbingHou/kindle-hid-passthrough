@@ -178,20 +178,22 @@ class HIDDaemon:
 
             finally:
                 self._host_task = None
+                # When suspended, suspend() owns cleanup of self.host. Skipping
+                # here avoids a race where both paths run host.cleanup() in
+                # parallel and deadlock on transport/connection teardown.
                 auth_fail_addr = None
-                if self.host:
+                if self.host and not self._suspended:
                     auth_fail_addr = self.host.get_auth_failure_address()
                     try:
                         await self.host.cleanup()
                     except Exception:
                         pass
+                    self.host = None
 
                 if auth_fail_addr:
                     logger.info(f"Auth failure for {auth_fail_addr}, clearing stale key")
                     config.remove_pairing_key(auth_fail_addr)
                     skip_delay = True
-
-                self.host = None
 
             if not self.running:
                 break

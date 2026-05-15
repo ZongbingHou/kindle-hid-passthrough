@@ -200,35 +200,31 @@ class ClassicMixin:
 
                 log.info(f"[Classic] Attempt {attempt}: {self._format_device(addr)}")
 
+                target = Address(addr, Address.PUBLIC_DEVICE_ADDRESS)
+                connect_task = asyncio.create_task(
+                    self.device.connect(target, transport=BT_BR_EDR_TRANSPORT)
+                )
+                # The finally below guarantees connect_task is cancelled and
+                # awaited on every exit path, including suspend cancellation —
+                # otherwise it leaks and asyncio logs an unretrieved exception
+                # when bumble eventually raises HCI_PAGE_TIMEOUT.
                 try:
-                    target = Address(addr, Address.PUBLIC_DEVICE_ADDRESS)
-                    connect_task = asyncio.create_task(
-                        self.device.connect(target, transport=BT_BR_EDR_TRANSPORT)
-                    )
-
+                    timed_out = True
                     for _ in range(self.ACTIVE_CONNECT_TIMEOUT):
                         if self._connection_future.done():
-                            connect_task.cancel()
                             return
-
                         done, _ = await asyncio.wait([connect_task], timeout=0.5)
                         if done:
+                            timed_out = False
                             break
 
-                    if not connect_task.done():
+                    if timed_out:
                         log.info(f"[Classic] {addr} timed out")
-                        connect_task.cancel()
-                        try:
-                            await connect_task
-                        except asyncio.CancelledError:
-                            pass
                         await asyncio.sleep(3.0)
                         continue
 
                     await connect_task
 
-                except asyncio.CancelledError:
-                    raise
                 except Exception as e:
                     if "DISALLOWED" in str(e) or "PENDING" in str(e):
                         log.warning("[Classic] HCI busy, waiting...")
@@ -236,6 +232,14 @@ class ClassicMixin:
                     else:
                         log.info(f"[Classic] Connect failed: {e}")
                         await asyncio.sleep(2.0)
+
+                finally:
+                    if not connect_task.done():
+                        connect_task.cancel()
+                    try:
+                        await connect_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
 
             if not self._connection_future.done():
                 await asyncio.sleep(self.ACTIVE_RETRY_INTERVAL)
