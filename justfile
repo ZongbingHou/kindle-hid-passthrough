@@ -24,7 +24,7 @@ deploy:
         --transform='s|^kindle_hid_passthrough/hid-passthrough-dev.upstart|etc/upstart/hid-passthrough.conf|' \
         --transform='s|^kindle_hid_passthrough/|mnt/us/kindle_hid_passthrough/|' \
         --transform='s|^assets/99-hid-keyboard.rules|etc/udev/rules.d/99-hid-keyboard.rules|' \
-        --transform='s|^scripts/dev_is_keyboard.sh|usr/local/bin/dev_is_keyboard.sh|' \
+        --transform='s|^scripts/dev_is_keyboard.sh|mnt/us/kindle_hid_passthrough/scripts/dev_is_keyboard.sh|' \
         --transform='s|^illusion/BTManager/|mnt/us/kindle_hid_passthrough/illusion/BTManager/|' \
         --transform='s|^illusion/BTManager.sh|mnt/us/kindle_hid_passthrough/illusion/BTManager.sh|' \
         kindle_hid_passthrough/*.py \
@@ -35,8 +35,8 @@ deploy:
         scripts/dev_is_keyboard.sh \
         illusion/BTManager/* \
         illusion/BTManager.sh \
-    ) | ssh kindle "mkdir -p /usr/local/bin && tar xf - -C /"
-    ssh kindle "chmod +x /usr/local/bin/dev_is_keyboard.sh"
+    ) | ssh kindle "tar xf - -C /"
+    ssh kindle "chmod +x {{remote_dir}}/scripts/dev_is_keyboard.sh"
     -ssh kindle "udevadm control --reload-rules" 2>/dev/null || true
     @echo "Clearing Python bytecode cache..."
     ssh kindle "rm -rf {{remote_dir}}/__pycache__"
@@ -186,10 +186,8 @@ _install-tarball tarball:
     ssh kindle "mkdir -p {{remote_dir}}"
     cat {{tarball}} | ssh kindle "tar xzf - -C {{remote_dir}}"
     @echo "Installing system files..."
-    ssh kindle "mkdir -p /usr/local/bin && \
-        cp {{remote_dir}}/assets/hid-passthrough.upstart /etc/upstart/hid-passthrough.conf && \
-        cp {{remote_dir}}/scripts/dev_is_keyboard.sh /usr/local/bin/dev_is_keyboard.sh && \
-        chmod +x /usr/local/bin/dev_is_keyboard.sh && \
+    ssh kindle "cp {{remote_dir}}/assets/hid-passthrough.upstart /etc/upstart/hid-passthrough.conf && \
+        chmod +x {{remote_dir}}/scripts/dev_is_keyboard.sh && \
         cp {{remote_dir}}/assets/99-hid-keyboard.rules /etc/udev/rules.d/ && \
         /usr/sbin/udevadm control --reload-rules"
     @echo "Installing WAF app..."
@@ -297,8 +295,8 @@ uninstall:
     @echo "Removing udev rules..."
     -ssh kindle "rm -f /etc/udev/rules.d/99-hid-keyboard.rules"
     -ssh kindle "/usr/sbin/udevadm control --reload-rules"
-    @echo "Removing helper script..."
-    -ssh kindle "rm -f /usr/local/bin/dev_is_keyboard.sh"
+    @echo "Removing legacy helper script (pre-/mnt/us layout)..."
+    -ssh kindle "[ -f /usr/local/bin/dev_is_keyboard.sh ] && rm -f /usr/local/bin/dev_is_keyboard.sh"
     @echo "Removing WAF app scriptlet..."
     -ssh kindle "rm -f /mnt/us/documents/BTManager.sh"
     @echo "Remounting read-only..."

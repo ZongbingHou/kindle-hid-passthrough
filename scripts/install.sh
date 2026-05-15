@@ -32,9 +32,8 @@ installAll()
 installUdevRules()
 {
   echo " -> Installing udev rules"
+  chmod +x scripts/dev_is_keyboard.sh
   /usr/sbin/mntroot rw
-  mkdir -p /usr/local/bin
-  cp scripts/dev_is_keyboard.sh /usr/local/bin/
   cp assets/99-hid-keyboard.rules /etc/udev/rules.d
   /usr/sbin/udevadm control --reload-rules
   /usr/sbin/mntroot ro
@@ -121,7 +120,9 @@ uninstallAll()
 
   echo " -> Removing udev rules"
   rm -f /etc/udev/rules.d/99-hid-keyboard.rules
-  rm -f /usr/local/bin/dev_is_keyboard.sh
+  if [ -f /usr/local/bin/dev_is_keyboard.sh ]; then
+    rm -f /usr/local/bin/dev_is_keyboard.sh
+  fi
   /usr/sbin/udevadm control --reload-rules 2>/dev/null
 
   echo " -> Unregistering WAF app"
