@@ -263,7 +263,7 @@ def _prepare_brcm(kindle, settle_time):
         log.error(f"{device_path} does not exist")
         return False
 
-    if not prepare_chip_hardware(kindle):
+    if not prepare_chip_hardware():
         log.error("BCM chip hardware bring-up failed")
         return False
 
