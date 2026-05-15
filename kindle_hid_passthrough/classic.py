@@ -148,7 +148,18 @@ class ClassicMixin:
                 return
 
             if not self.hid_host.l2cap_intr_channel:
-                log.warning("[Classic] HID interrupt channel failed to connect")
+                log.warning("[Classic] HID interrupt channel failed to connect, dropping link")
+                try:
+                    await connection.disconnect()
+                except Exception:
+                    pass
+                self.connection = None
+                self.current_device_address = None
+                self.connected_protocol = None
+                if not self._connection_future.done():
+                    self._connection_future.set_exception(
+                        InvalidStateError("[Classic] HID channels not opened by peer")
+                    )
                 return
 
             if not self._connection_future.done():
@@ -197,6 +208,8 @@ class ClassicMixin:
             for addr in addresses:
                 if self._connection_future.done():
                     return
+                if self.connection is not None:
+                    continue
 
                 log.info(f"[Classic] Attempt {attempt}: {self._format_device(addr)}")
 

@@ -731,7 +731,11 @@ class HIDHost(ClassicMixin, BLEMixin):
                         pass
             self.hid_host = None
 
-        if self._is_connection_alive():
+        peer_already_disconnected = (
+            self._disconnection_event is not None
+            and self._disconnection_event.is_set()
+        )
+        if self._is_connection_alive() and not peer_already_disconnected:
             try:
                 await self.connection.disconnect()
             except Exception as e:
