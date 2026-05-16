@@ -179,14 +179,18 @@ class DaemonController:
         Without address: just resume if suspended (used by /start).
         """
         if not address:
-            if self.daemon._suspended:
-                asyncio.run_coroutine_threadsafe(self.daemon.resume(), self.loop)
+            asyncio.run_coroutine_threadsafe(self._do_resume(), self.loop)
             return
 
         protocol = Protocol.CLASSIC if protocol_str == 'classic' else Protocol.BLE
         asyncio.run_coroutine_threadsafe(
             self._do_connect(address, protocol), self.loop
         )
+
+    async def _do_resume(self):
+        async with self._op_lock:
+            if self.daemon._suspended:
+                await self.daemon.resume()
 
     async def _do_connect(self, address, protocol):
         async with self._op_lock:

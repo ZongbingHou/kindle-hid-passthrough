@@ -721,13 +721,15 @@ class HIDHost(ClassicMixin, BLEMixin):
             if self._is_connection_alive():
                 if self.hid_host.l2cap_intr_channel:
                     try:
-                        await self.hid_host.disconnect_interrupt_channel()
-                    except Exception:
+                        await asyncio.wait_for(
+                            self.hid_host.disconnect_interrupt_channel(), timeout=1.0)
+                    except (asyncio.TimeoutError, Exception):
                         pass
                 if self.hid_host.l2cap_ctrl_channel:
                     try:
-                        await self.hid_host.disconnect_control_channel()
-                    except Exception:
+                        await asyncio.wait_for(
+                            self.hid_host.disconnect_control_channel(), timeout=1.0)
+                    except (asyncio.TimeoutError, Exception):
                         pass
             self.hid_host = None
 
@@ -737,7 +739,9 @@ class HIDHost(ClassicMixin, BLEMixin):
         )
         if self._is_connection_alive() and not peer_already_disconnected:
             try:
-                await self.connection.disconnect()
+                await asyncio.wait_for(self.connection.disconnect(), timeout=2.0)
+            except asyncio.TimeoutError:
+                log.warning("Connection disconnect timed out")
             except Exception as e:
                 log.debug(f"Disconnect cleanup: {e}")
         self.connection = None
@@ -751,7 +755,13 @@ class HIDHost(ClassicMixin, BLEMixin):
             self._classic_connection_listener = None
 
         if self.transport:
-            await self.transport.close()
+            try:
+                await asyncio.wait_for(self.transport.close(), timeout=3.0)
+            except asyncio.TimeoutError:
+                log.warning("Transport close timed out, fd may leak")
+            except Exception:
+                pass
+            self.transport = None
 
     async def clear_stale_key(self, address: str) -> bool:
         """Clear a stale link key from the keystore.

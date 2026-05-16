@@ -2,6 +2,7 @@
 """Bumble transport and device initialization."""
 
 import asyncio
+import os
 
 from bumble.device import Device
 from bumble.hci import HCI_Reset_Command
@@ -11,6 +12,42 @@ from config import config
 from logging_utils import log
 
 __all__ = ['create_bumble_device']
+
+
+def _release_leaked_fds(device_path: str) -> int:
+    """Close fds in this process pointing at device_path. Returns count."""
+    closed = 0
+    try:
+        for entry in os.listdir('/proc/self/fd'):
+            try:
+                target = os.readlink(f'/proc/self/fd/{entry}')
+            except OSError:
+                continue
+            if target == device_path:
+                try:
+                    os.close(int(entry))
+                    closed += 1
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return closed
+
+
+async def _open_transport_with_recovery(spec: str):
+    try:
+        return await asyncio.wait_for(
+            open_transport(spec), timeout=config.transport_timeout)
+    except OSError as e:
+        if e.errno != 16 or not spec.startswith('file:'):
+            raise
+        device_path = spec[5:]
+        n = _release_leaked_fds(device_path)
+        if n == 0:
+            raise
+        log.warning(f"Released {n} leaked fd(s) for {device_path}, retrying")
+        return await asyncio.wait_for(
+            open_transport(spec), timeout=config.transport_timeout)
 
 
 async def create_bumble_device(transport_spec=None, configure=None):
@@ -32,10 +69,7 @@ async def create_bumble_device(transport_spec=None, configure=None):
 
     log.info("Opening transport...")
     try:
-        transport = await asyncio.wait_for(
-            open_transport(spec),
-            timeout=config.transport_timeout
-        )
+        transport = await _open_transport_with_recovery(spec)
     except asyncio.TimeoutError:
         log.error(f"Transport open timed out after {config.transport_timeout}s")
         raise
