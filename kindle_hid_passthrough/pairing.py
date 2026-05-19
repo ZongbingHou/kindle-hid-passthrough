@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bluetooth pairing utilities — delegate, config, and keystore."""
 
+from bumble.core import BT_BR_EDR_TRANSPORT
 from bumble.keys import JsonKeyStore
 from bumble.pairing import PairingConfig, PairingDelegate
 
@@ -12,10 +13,8 @@ __all__ = ['AutoAcceptPairingDelegate', 'create_pairing_config', 'create_keystor
 class AutoAcceptPairingDelegate(PairingDelegate):
     """Pairing delegate that auto-accepts all pairing requests."""
 
-    def __init__(self):
-        super().__init__(
-            io_capability=PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT
-        )
+    def __init__(self, io_capability=PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT):
+        super().__init__(io_capability=io_capability)
 
     async def accept(self):
         log.success("Pairing request received - accepting")
@@ -33,8 +32,20 @@ class AutoAcceptPairingDelegate(PairingDelegate):
         log.info(f"Display PIN: {number:0{digits}}")
 
 
-def create_pairing_config() -> PairingConfig:
-    """Create pairing configuration with secure defaults."""
+def create_pairing_config(conn=None) -> PairingConfig:
+    """Create pairing configuration; relaxed for Classic, strict for BLE."""
+    transport = getattr(conn, 'transport', None) if conn is not None else None
+    if transport == BT_BR_EDR_TRANSPORT:
+        log.info("[Pairing] Classic config: sc=False, mitm=False, DisplayOnly")
+        return PairingConfig(
+            sc=False,
+            mitm=False,
+            bonding=True,
+            delegate=AutoAcceptPairingDelegate(
+                io_capability=PairingDelegate.DISPLAY_OUTPUT_ONLY
+            ),
+        )
+
     return PairingConfig(
         sc=True,
         mitm=True,

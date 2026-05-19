@@ -118,7 +118,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             device.classic_enabled = bool(self.classic_devices)
             device.le_enabled = bool(self.ble_devices)
             device.keystore = self.keystore
-            device.pairing_config_factory = lambda conn: create_pairing_config()
+            device.pairing_config_factory = create_pairing_config
             if self.classic_devices:
                 device.classic_ssp_enabled = True
                 device.classic_sc_enabled = True
