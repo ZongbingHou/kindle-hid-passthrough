@@ -85,9 +85,6 @@ jobs:
           cp -r illusion/ output/
           cp -r koreader-plugin/ output/
           cp kindle_hid_passthrough/config.ini output/
-          # Copy so both assets/ and scripts/ paths resolve dev_is_keyboard.sh
-          # (FAT32 on /mnt/us/ doesn't support symlinks)
-          cp scripts/dev_is_keyboard.sh output/assets/dev_is_keyboard.sh
 
       - name: Show contents
         run: |
@@ -110,7 +107,6 @@ jobs:
           for f in \
             kindle-hid-passthrough \
             assets/hid-passthrough.upstart \
-            assets/dev_is_keyboard.sh \
             assets/99-hid-keyboard.rules \
             scripts/dev_is_keyboard.sh \
             illusion/BTManager.sh \
