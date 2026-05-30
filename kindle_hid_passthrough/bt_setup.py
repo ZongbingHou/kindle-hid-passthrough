@@ -16,6 +16,7 @@ Auto-detects kernel version and module paths. Override via config.ini:
 import glob
 import os
 import re
+import signal
 import subprocess
 import time
 
@@ -144,6 +145,48 @@ def _ensure_uhid():
     return os.path.exists('/dev/uhid')
 
 
+def _kill_holders_via_proc(device_path):
+    """Kill processes holding device_path by scanning /proc directly.
+
+    Fallback for when fuser(1) is missing or didn't catch the holder.
+    Walks every /proc/<pid>/fd, resolves each symlink, and SIGKILLs any
+    process (other than ourselves) with the device open.
+
+    Returns:
+        Number of processes signalled.
+    """
+    my_pid = os.getpid()
+    killed = 0
+    try:
+        pids = [e for e in os.listdir('/proc') if e.isdigit()]
+    except OSError:
+        return 0
+
+    for pid in pids:
+        if int(pid) == my_pid:
+            continue
+        fd_dir = f'/proc/{pid}/fd'
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue  # process exited or not readable
+        for fd in fds:
+            try:
+                target = os.readlink(f'{fd_dir}/{fd}')
+            except OSError:
+                continue
+            if target == device_path:
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                    killed += 1
+                    log.info(f"Killed PID {pid} holding {device_path}")
+                except OSError as e:
+                    log.warning(f"Could not kill PID {pid}: {e}")
+                break  # one match per process is enough
+
+    return killed
+
+
 def _is_device_free(device_path):
     """Check if the BT device can be opened."""
     try:
@@ -158,7 +201,8 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
     """Prepare Bluetooth hardware for use.
 
     1. Load BT kernel module if not already loaded
-    2. Evict whatever process is holding the HCI device (via fuser)
+    2. Evict whatever process is holding the HCI device (fuser, then a
+       direct /proc scan if fuser is unavailable or comes up short)
     3. Wait for device to settle
 
     Uses auto-detected Kindle hardware defaults when module_patterns
@@ -215,12 +259,21 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
         log.info(f"{device_path} is available")
         return True
 
-    # Step 3: Device is busy - evict whoever holds it
+    # Step 3: Device is busy - evict whoever holds it, first via fuser
     log.info(f"{device_path} is busy, evicting holder...")
     if _free_device(device_path) and settle_time > 0:
         time.sleep(settle_time)
 
-    # Step 4: Verify
+    if _is_device_free(device_path):
+        log.info(f"{device_path} is now available")
+        return True
+
+    # Step 4: fuser came up short (missing or didn't catch the holder).
+    # Scan /proc ourselves and kill whoever has the device open.
+    log.warning(f"{device_path} still busy, scanning /proc for holders...")
+    if _kill_holders_via_proc(device_path) and settle_time > 0:
+        time.sleep(settle_time)
+
     if _is_device_free(device_path):
         log.info(f"{device_path} is now available")
         return True
