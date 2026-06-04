@@ -15,10 +15,11 @@ Auto-detects kernel version and module paths. Override via config.ini:
 
 import glob
 import os
+import re
 import subprocess
 import time
 
-from kindle_detect import detect_kindle
+from kindle_detect import detect_codename, detect_kindle
 from logging_utils import log
 
 # Known BT kernel module patterns across Kindle versions
@@ -26,6 +27,11 @@ DEFAULT_MODULE_PATTERNS = [
     'wmt_cdev_bt.ko',   # MediaTek (PW4/5, Kindle 10/11, Scribe)
     'bt_drv.ko',         # Older Freescale/NXP Kindles
 ]
+
+BUNDLED_MODULES_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'docs', 'modules'
+)
+VERSION_TXT = '/etc/version.txt'
 
 
 def _run(cmd, **kwargs):
@@ -103,6 +109,41 @@ def _free_device(device_path):
         return False
 
 
+def _read_firmware_build():
+    try:
+        with open(VERSION_TXT) as f:
+            line = f.readline()
+    except OSError:
+        return None
+    m = re.search(r'-(\d+)\s*$', line.strip())
+    return m.group(1) if m else None
+
+
+def _ensure_uhid():
+    """Load bundled uhid.ko on Kindles whose stock kernel lacks CONFIG_UHID."""
+    if os.path.exists('/dev/uhid'):
+        return True
+    codename = detect_codename()
+    if not codename:
+        return False
+    build = _read_firmware_build()
+    if not build:
+        log.error(f"could not read build from {VERSION_TXT}")
+        return False
+    kernel = os.uname().release
+    expected = f"uhid-{kernel}-{build}-{codename}.ko"
+    ko = os.path.join(BUNDLED_MODULES_DIR, expected)
+    if not os.path.exists(ko):
+        log.error(f"no bundled uhid.ko matching {expected}")
+        log.error("please file an issue with /etc/version.txt output")
+        return False
+    log.info(f"loading {expected}")
+    if not _run(['/sbin/insmod', ko]):
+        log.error("insmod failed")
+        return False
+    return os.path.exists('/dev/uhid')
+
+
 def _is_device_free(device_path):
     """Check if the BT device can be opened."""
     try:
@@ -132,6 +173,9 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
     Returns:
         True if BT device is ready.
     """
+    # Load bundled uhid.ko first; no-op on Kindles where /dev/uhid already exists
+    _ensure_uhid()
+
     # Use auto-detected Kindle defaults when not explicitly provided
     kindle = detect_kindle()
 

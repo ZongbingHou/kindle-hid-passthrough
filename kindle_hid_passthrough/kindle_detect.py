@@ -51,38 +51,39 @@ _BRCM_HW = None
 
 
 # --- Generations with device codes ---
-# Each entry: (name, hw_profile, [device_codes])
+# Each entry: (name, hw_profile, [device_codes], codename)
 # Device codes are integers derived from KindleTool model_tuples.
 # hw_profile=None means detected but unsupported.
+# codename drives bundled uhid.ko lookup; None for MTK (kernel has /dev/uhid).
 
 _GENERATIONS = [
     # NXP i.MX + Broadcom BCM4343 (8th-10th gen, BSA stack, unsupported)
-    ('Kindle Oasis 1',   _BRCM_HW, [0x20C, 0x20D, 0x219, 0x21A, 0x21B, 0x21C]),
-    ('Kindle Oasis 2',   _BRCM_HW, [0x295, 0x296, 0x297, 0x298, 0x2E1, 0x2E2, 0x2E6, 0x2E7, 0x2E8, 0x341, 0x342, 0x343, 0x344, 0x347, 0x34A]),
+    ('Kindle Oasis 1',   _BRCM_HW, [0x20C, 0x20D, 0x219, 0x21A, 0x21B, 0x21C], 'duet'),
+    ('Kindle Oasis 2',   _BRCM_HW, [0x295, 0x296, 0x297, 0x298, 0x2E1, 0x2E2, 0x2E6, 0x2E7, 0x2E8, 0x341, 0x342, 0x343, 0x344, 0x347, 0x34A], 'zelda'),
     ('Kindle PW4',       _BRCM_HW, [
         0x2F7, 0x361, 0x362, 0x363, 0x364, 0x365, 0x366, 0x367, 0x372, 0x373, 0x374, 0x375, 0x376, 0x402, 0x403,
         0x4D8, 0x4D9, 0x4DA, 0x4DB, 0x4DC, 0x4DD, 0x2F4,
-    ]),
-    ('Kindle Basic 4',   _BRCM_HW, [0x414, 0x3CF, 0x3D0, 0x3D1, 0x3D2, 0x3AB]),
-    ('Kindle Oasis 3',   _BRCM_HW, [0x434, 0x3D8, 0x3D7, 0x3D6, 0x3D5, 0x3D4]),
+    ], 'rex'),
+    ('Kindle Basic 4',   _BRCM_HW, [0x414, 0x3CF, 0x3D0, 0x3D1, 0x3D2, 0x3AB], 'rex'),
+    ('Kindle Oasis 3',   _BRCM_HW, [0x434, 0x3D8, 0x3D7, 0x3D6, 0x3D5, 0x3D4], 'zelda'),
 
     # MediaTek CONSYS platforms
-    ('Kindle PW5',       _MTK_HW, [0x690, 0x700, 0x6FF, 0x7AD, 0x829, 0x82A, 0x971, 0x972, 0x9B3]),
-    ('Kindle Basic 5',   _MTK_HW, [0x84D, 0x8BB, 0x86A, 0x958, 0x957, 0x7F1, 0x84C]),
-    ('Kindle Scribe',    _MTK_HW, [0x8F2, 0x974, 0x8C3, 0x847, 0x975, 0x874, 0x875, 0x8E0]),
-    ('Kindle Basic 6',   _MTK_HW, [0xE85, 0xE86, 0xE84, 0xE83, 0x2909, 0xE82, 0xE75]),
-    ('Kindle PW6',       _MTK_HW, [0xC89, 0xC86, 0xC7F, 0xC7E, 0xE2A, 0xE25, 0xE23, 0xE28, 0xE45, 0xE5A]),
-    ('Kindle Scribe 2',  _MTK_HW, [0xFA0, 0xFA1, 0xFE5, 0xF9D, 0xFE4, 0xFE3, 0x102E, 0x102D]),
-    ('Kindle Colorsoft',  _MTK_HW, [0xE29, 0xE24, 0xE2B, 0xE26, 0xE22, 0xC9F, 0xE27, 0xE5B, 0xE46, 0x10A6, 0x10A5, 0x11D7]),
-    ('Kindle Scribe 3',  _MTK_HW, [0x12F0, 0x12EE, 0x12F4, 0x11E8, 0x11EA, 0x10A4]),
-    ('Kindle Scribe CS', _MTK_HW, [0x13BF, 0x12EF, 0x12F1, 0x11E9, 0x11EB, 0x10D7]),
+    ('Kindle PW5',       _MTK_HW, [0x690, 0x700, 0x6FF, 0x7AD, 0x829, 0x82A, 0x971, 0x972, 0x9B3], None),
+    ('Kindle Basic 5',   _MTK_HW, [0x84D, 0x8BB, 0x86A, 0x958, 0x957, 0x7F1, 0x84C], None),
+    ('Kindle Scribe',    _MTK_HW, [0x8F2, 0x974, 0x8C3, 0x847, 0x975, 0x874, 0x875, 0x8E0], None),
+    ('Kindle Basic 6',   _MTK_HW, [0xE85, 0xE86, 0xE84, 0xE83, 0x2909, 0xE82, 0xE75], None),
+    ('Kindle PW6',       _MTK_HW, [0xC89, 0xC86, 0xC7F, 0xC7E, 0xE2A, 0xE25, 0xE23, 0xE28, 0xE45, 0xE5A], None),
+    ('Kindle Scribe 2',  _MTK_HW, [0xFA0, 0xFA1, 0xFE5, 0xF9D, 0xFE4, 0xFE3, 0x102E, 0x102D], None),
+    ('Kindle Colorsoft',  _MTK_HW, [0xE29, 0xE24, 0xE2B, 0xE26, 0xE22, 0xC9F, 0xE27, 0xE5B, 0xE46, 0x10A6, 0x10A5, 0x11D7], None),
+    ('Kindle Scribe 3',  _MTK_HW, [0x12F0, 0x12EE, 0x12F4, 0x11E8, 0x11EA, 0x10A4], None),
+    ('Kindle Scribe CS', _MTK_HW, [0x13BF, 0x12EF, 0x12F1, 0x11E9, 0x11EB, 0x10D7], None),
 ]
 
-# Flat lookup: device_code -> (name, hw_profile)
+# Flat lookup: device_code -> (name, hw_profile, codename)
 _CODE_LOOKUP = {}
-for _name, _hw, _codes in _GENERATIONS:
+for _name, _hw, _codes, _codename in _GENERATIONS:
     for _code in _codes:
-        _CODE_LOOKUP[_code] = (_name, _hw)
+        _CODE_LOOKUP[_code] = (_name, _hw, _codename)
 
 
 def _decode_device_code(serial: str) -> Optional[int]:
@@ -147,7 +148,7 @@ def detect_kindle(serial: str = None) -> Optional[KindleDefaults]:
         log.info(f"Unknown device code 0x{device_code:X} (pre-BT or unrecognized)")
         return None
 
-    name, hw = result
+    name, hw, _codename = result
     if hw is None:
         log.error(f"Detected {name} (code 0x{device_code:X}) - uses Broadcom BSA stack, not supported. "
                    "See https://github.com/zampierilucas/kindle-hid-passthrough/issues/22")
@@ -160,3 +161,17 @@ def detect_kindle(serial: str = None) -> Optional[KindleDefaults]:
     )
     log.info(f"Detected {name} (code 0x{device_code:X})")
     return defaults
+
+
+def detect_codename(serial: str = None) -> Optional[str]:
+    if serial is None:
+        serial = read_serial()
+    if not serial:
+        return None
+    code = _decode_device_code(serial)
+    if code is None:
+        return None
+    result = _CODE_LOOKUP.get(code)
+    if result is None:
+        return None
+    return result[2]
