@@ -25,6 +25,7 @@ local Screen = require("device").screen
 local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local rapidjson = require("rapidjson")
 local util = require("util")
@@ -288,15 +289,22 @@ function HIDPassthrough:_checkKeyboard(path)
     return result
 end
 
--- List /dev/input/event* paths.
+-- List /dev/input/event* paths. Returns nil when the directory can't be
+-- enumerated, so callers can tell "no devices" apart from "listing failed".
 local function listEventPaths()
-    local paths = {}
-    local f = io.popen("ls /dev/input/event* 2>/dev/null")
-    if not f then return paths end
-    for line in f:lines() do
-        table.insert(paths, line)
+    local ok, paths = pcall(function()
+        local t = {}
+        for name in lfs.dir("/dev/input") do
+            if name:match("^event%d+$") then
+                table.insert(t, "/dev/input/" .. name)
+            end
+        end
+        return t
+    end)
+    if not ok then
+        logger.dbg("HIDPassthrough: /dev/input listing failed:", paths)
+        return nil
     end
-    f:close()
     return paths
 end
 
@@ -384,8 +392,15 @@ function HIDPassthrough:_reconcileKeyboards()
     if not self._kb_watcher_active then return end
     if not FBInkInput then return end
 
+    local event_paths = listEventPaths()
+    if not event_paths then
+        -- Listing failed; don't treat that as "all keyboards gone".
+        UIManager:scheduleIn(self.WATCHER_INTERVAL, self._reconcileKeyboardsCb)
+        return
+    end
+
     local seen = {}
-    for _, path in ipairs(listEventPaths()) do
+    for _, path in ipairs(event_paths) do
         seen[path] = true
         if not self._kb_attached[path] then
             local info = self:_checkKeyboard(path)
