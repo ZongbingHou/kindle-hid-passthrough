@@ -346,7 +346,7 @@ class TestKindleDetectTransport:
         # Actually 0x20C doesn't fit in 2 hex chars. These must be G-serials.
         # For testing, let's just verify the data structure
         from kindle_detect import _CODE_LOOKUP, _BRCM_HW
-        name, hw = _CODE_LOOKUP[0x20C]
+        name, hw, codename = _CODE_LOOKUP[0x20C]
         assert name == 'Kindle Oasis'
         assert hw is _BRCM_HW
         assert hw['transport_scheme'] == 'serial'
@@ -357,7 +357,7 @@ class TestKindleDetectTransport:
 
     def test_mtk_transport_string(self):
         from kindle_detect import _CODE_LOOKUP, _MTK_HW
-        name, hw = _CODE_LOOKUP[0x690]  # PW5
+        name, hw, codename = _CODE_LOOKUP[0x690]  # PW5
         assert name == 'Kindle PW5'
         assert hw is _MTK_HW
         assert hw['transport_scheme'] == 'file'
