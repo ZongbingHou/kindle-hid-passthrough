@@ -156,6 +156,11 @@ def main():
     log.info(f"Kindle HID Passthrough v{get_version()}")
     log.info(f"Config base path: {config.base_path}")
 
+    if not config.transport:
+        log.error("No HCI transport available - unsupported Kindle model or "
+                  "missing BT device node (see errors above)")
+        sys.exit(1)
+
     protocol_override = None
     if args.protocol:
         protocol_override = Protocol.CLASSIC if args.protocol == 'classic' else Protocol.BLE

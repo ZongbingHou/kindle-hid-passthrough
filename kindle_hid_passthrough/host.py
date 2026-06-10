@@ -181,6 +181,8 @@ class HIDHost:
         """Initialize the Bumble device with both protocols."""
         log.info(f"HID Host v{get_version()}")
 
+        if not self.transport_spec:
+            raise RuntimeError("No HCI transport available")
         log.info("Opening transport...")
 
         try:

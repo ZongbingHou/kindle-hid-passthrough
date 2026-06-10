@@ -50,6 +50,8 @@ class Scanner:
 
     async def start(self):
         """Initialize the Bumble device."""
+        if not self.transport_spec:
+            raise RuntimeError("No HCI transport available")
         log.info("Scanner: Opening transport...")
 
         try:
