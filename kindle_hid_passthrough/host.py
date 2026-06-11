@@ -232,106 +232,19 @@ class HIDHost(ClassicMixin, BLEMixin):
         proto_name = self.connected_protocol.value.upper()
         log.success(f"\n[{proto_name}] Receiving HID reports. Press Ctrl+C to exit.")
 
-        # Wait for disconnection with retry on auth failure
-        max_auth_retries = 3
-        auth_retry_count = 0
-
+        # Daemon owns the reconnect + stale-key-clear policy: on auth
+        # failure it reads get_auth_failure_address(), removes the key,
+        # and restarts us on a fresh transport. Only a Classic auth
+        # failure while BLE is connected is absorbed here.
         while True:
             await self._disconnection_event.wait()
 
-            # Check if this was an auth failure that we should retry
-            # Only retry if:
-            # 1. We have an auth failure address
-            # 2. We haven't exceeded retry limit
-            # 3. The current protocol is Classic (not BLE which is working fine)
-            # 4. We don't have an active connection on another protocol
-            should_retry = (
-                self._auth_failure_address and
-                auth_retry_count < max_auth_retries and
-                (self.connected_protocol == Protocol.CLASSIC or self.connected_protocol is None)
-            )
-
-            # If BLE is active and working, don't retry Classic
             if self._auth_failure_address and self.connected_protocol == Protocol.BLE and self.connection:
                 log.info("[Classic] Auth failure ignored - BLE connection is active")
                 self._auth_failure_address = None
                 self._disconnection_event.clear()
                 continue
-
-            if should_retry:
-                auth_retry_count += 1
-                failed_addr = self._auth_failure_address
-                self._auth_failure_address = None
-
-                log.info(f"[Classic] Auth failure retry {auth_retry_count}/{max_auth_retries}")
-
-                # Clear the stale key
-                log.info(f"[Classic] Attempting to clear stale key for: {failed_addr}")
-                cleared = await self.clear_stale_key(failed_addr)
-                if not cleared:
-                    log.warning("[Classic] Key clearing failed or no key found - retry may fail again")
-
-                # Clean up current connection state
-                if self.hid_host:
-                    self.hid_host = None
-                self.connection = None
-                self.connected_protocol = None
-                self.current_device_address = None
-
-                # Destroy UHID device if it was created
-                if self.uhid_device:
-                    try:
-                        self.uhid_device.destroy()
-                    except Exception:
-                        pass
-                    self.uhid_device = None
-
-                # Reset events for retry
-                self._disconnection_event.clear()
-                self._connection_future = asyncio.get_event_loop().create_future()
-
-                # Wait before retry
-                log.info("[Classic] Waiting 3s before retry...")
-                await asyncio.sleep(3.0)
-
-                # Re-start Classic handler only
-                log.info("[Classic] Restarting connection handler...")
-                classic_task = asyncio.create_task(
-                    self._run_classic_handler(),
-                    name="classic_handler_retry"
-                )
-
-                try:
-                    await asyncio.wait_for(self._connection_future, timeout=60.0)
-                except asyncio.TimeoutError:
-                    log.warning("[Classic] Retry connection timeout")
-                    classic_task.cancel()
-                    try:
-                        await classic_task
-                    except asyncio.CancelledError:
-                        pass
-                    break
-                finally:
-                    if not classic_task.done():
-                        classic_task.cancel()
-                        try:
-                            await classic_task
-                        except asyncio.CancelledError:
-                            pass
-
-                # Handle the new connection
-                if self.connected_protocol == Protocol.CLASSIC:
-                    await self._handle_classic_connection()
-                    log.success("\n[CLASSIC] Receiving HID reports. Press Ctrl+C to exit.")
-                    # Loop will continue to wait for next disconnection
-                else:
-                    break  # Unexpected state
-            else:
-                # Normal disconnection or max retries reached
-                if auth_retry_count >= max_auth_retries:
-                    log.error(f"[Classic] Max auth retries ({max_auth_retries}) reached, giving up")
-                break
-
+            break
 
     # ==================== PAIRING ====================
 
@@ -762,56 +675,6 @@ class HIDHost(ClassicMixin, BLEMixin):
             except Exception:
                 pass
             self.transport = None
-
-    async def clear_stale_key(self, address: str) -> bool:
-        """Clear a stale link key from the keystore.
-
-        Args:
-            address: Device address to clear key for
-
-        Returns:
-            True if key was cleared
-        """
-        if not self.keystore:
-            log.warning("[Classic] No keystore available for key clearing")
-            return False
-
-        # Try multiple address formats
-        norm_addr = normalize_addr(address)
-        addresses_to_try = [
-            norm_addr,                    # Just the MAC: 98:B9:EA:01:67:68
-            f"{norm_addr}/P",             # With public suffix: 98:B9:EA:01:67:68/P
-            address,                      # Original format
-            address.upper(),              # Original uppercase
-        ]
-
-        # Log what keys are in keystore for debugging
-        try:
-            all_keys = await self.keystore.get_all()
-            if all_keys:
-                log.info(f"[Classic] Keystore has {len(all_keys)} entries:")
-                for entry in all_keys:
-                    key_addr = str(entry[0]) if isinstance(entry, (list, tuple)) else str(entry)
-                    log.info(f"[Classic]   - {key_addr}")
-            else:
-                log.info("[Classic] Keystore is empty")
-        except Exception as e:
-            log.warning(f"[Classic] Could not list keystore: {e}")
-
-        # Try each address format
-        for addr in addresses_to_try:
-            try:
-                keys = await self.keystore.get(addr)
-                if keys and keys.link_key:
-                    log.info(f"[Classic] Found key with format: {addr}")
-                    await self.keystore.delete(addr)
-                    log.success(f"[Classic] Link key cleared for {addr}")
-                    return True
-            except Exception as e:
-                log.debug(f"[Classic] No key at {addr}: {e}")
-
-        log.warning(f"[Classic] No link key found for {address} (tried: {addresses_to_try})")
-        return False
 
     def get_auth_failure_address(self) -> str:
         """Get address that had auth failure, if any."""
