@@ -58,7 +58,7 @@ EOF
 # ---- Start helper daemon ----
 
 start_helper() {
-    if pgrep -f "$LD_PROCESS" >/dev/null 2>&1; then
+    if pgrep -f "$LD_PROCESS" >/dev/null 2>&1 || pgrep -f 'main.py --daemon' >/dev/null 2>&1; then
         log_msg "Daemon already running"
         return
     fi
