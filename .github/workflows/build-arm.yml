@@ -42,12 +42,14 @@ jobs:
           skip-extraction: ${{ steps.cache-nuitka.outputs.cache-hit }}
 
       - name: Stamp build SHA
+        id: stamp
         env:
           FULL_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           SHA=$(git rev-parse --short "$FULL_SHA")
           echo "$SHA" > kindle_hid_passthrough/BUILD_SHA
           sed -i "s/^__build_sha__ = None/__build_sha__ = \"${SHA}\"/" kindle_hid_passthrough/config.py
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build ARMv7 binary with Docker
         uses: docker/build-push-action@v6
@@ -138,6 +140,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: kindle-hid-passthrough-armv7.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create dev prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-${{ steps.stamp.outputs.sha }}
+          name: Dev build ${{ steps.stamp.outputs.sha }}
+          files: kindle-hid-passthrough-armv7.tar.gz
+          prerelease: true
+          make_latest: "false"
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
