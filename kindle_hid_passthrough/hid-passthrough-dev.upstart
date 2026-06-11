@@ -11,5 +11,5 @@ env KINDLE_HID_BASE=/mnt/us/kindle_hid_passthrough
 console none
 
 script
-    exec /mnt/us/python3.10-kindle/python3-wrapper.sh /mnt/us/kindle_hid_passthrough/main.py --daemon >/dev/null 2>&1
+    exec /mnt/us/python3.10-kindle/python3-wrapper.sh /mnt/us/kindle_hid_passthrough/main.py --daemon >>/var/log/hid_passthrough.log 2>&1
 end script
