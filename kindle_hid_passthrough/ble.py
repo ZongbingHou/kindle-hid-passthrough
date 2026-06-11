@@ -51,9 +51,11 @@ class BLEMixin:
         await self.device.send_command(
             HCI_LE_Clear_Filter_Accept_List_Command(), check_result=True)
 
-        for addr_str in addresses:
+        known = {normalize_addr(a) for a in addresses} | self._keystore_addresses
+
+        for addr_str in sorted(known):
             target = Address(addr_str)
-            known_type = self._keystore_address_types.get(normalize_addr(addr_str))
+            known_type = self._keystore_address_types.get(addr_str)
             if known_type is not None:
                 entry_types = [known_type & 1]
             else:
@@ -66,8 +68,6 @@ class BLEMixin:
                     ), check_result=True)
 
         log.info(f"[BLE] Waiting for {len(addresses)} device(s) (accept list)")
-
-        known = {normalize_addr(a) for a in addresses} | self._keystore_addresses
 
         try:
             connection = None

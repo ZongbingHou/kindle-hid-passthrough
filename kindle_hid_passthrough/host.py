@@ -12,7 +12,7 @@ from bumble.gatt import (
     GATT_REPORT_CHARACTERISTIC,
     GATT_REPORT_MAP_CHARACTERISTIC,
 )
-from bumble.hci import Address, HCI_Write_Class_Of_Device_Command, HCI_Write_Local_Name_Command, OwnAddressType
+from bumble.hci import Address, HCI_LE_SET_PRIVACY_MODE_COMMAND, HCI_LE_Set_Privacy_Mode_Command, HCI_Write_Class_Of_Device_Command, HCI_Write_Local_Name_Command, OwnAddressType
 from bumble.hid import Host as BumbleHIDHost
 from bumble.sdp import Client as SDPClient
 
@@ -132,6 +132,10 @@ class HIDHost(ClassicMixin, BLEMixin):
         self.transport, self.device = await create_bumble_device(
             self.transport_spec, configure=configure)
 
+        if self.device.address_resolution_offload:
+            await self._set_device_privacy_modes()
+            log.info("Controller address resolution enabled")
+
         # Classic-specific setup
         if self.classic_devices:
             class_of_device = 0x000104  # Computer/Desktop
@@ -153,6 +157,22 @@ class HIDHost(ClassicMixin, BLEMixin):
         # Load keystore addresses
         await self._load_keystore_addresses()
 
+
+    async def _set_device_privacy_modes(self):
+        """Keep bonded peers visible when they advertise with their
+        identity address instead of an RPA."""
+        if not self.device.host.supports_command(HCI_LE_SET_PRIVACY_MODE_COMMAND):
+            return
+        for _, address in await self.keystore.get_resolving_keys():
+            try:
+                await self.device.send_command(
+                    HCI_LE_Set_Privacy_Mode_Command(
+                        peer_identity_address_type=address.address_type,
+                        peer_identity_address=address,
+                        privacy_mode=HCI_LE_Set_Privacy_Mode_Command.PrivacyMode.DEVICE_PRIVACY_MODE,
+                    ), check_result=True)
+            except Exception as e:
+                log.warning(f"Privacy mode for {address}: {e}")
 
     async def _load_keystore_addresses(self):
         """Load addresses from keystore for connection filtering."""
