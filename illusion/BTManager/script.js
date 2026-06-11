@@ -652,6 +652,7 @@ var BTManager = (function() {
         } else if (typeof kindle !== "undefined" && kindle.appmgr && kindle.appmgr.back) {
             kindle.appmgr.back();
         }
+        request("/quit-app", function() {});
     }
 
     // ---- Event Binding ----
