@@ -69,6 +69,7 @@ class HIDHost(ClassicMixin, BLEMixin):
         self.classic_devices: List[DeviceConfig] = []
         self.ble_devices: List[DeviceConfig] = []
         self._keystore_addresses: set = set()
+        self._keystore_address_types: dict = {}
 
         self.keystore = create_keystore(config.pairing_keys_file)
         self.device_cache = DeviceCache(config.cache_dir)
@@ -156,6 +157,7 @@ class HIDHost(ClassicMixin, BLEMixin):
     async def _load_keystore_addresses(self):
         """Load addresses from keystore for connection filtering."""
         self._keystore_addresses = set()
+        self._keystore_address_types = {}
         if self.keystore:
             try:
                 keys = await self.keystore.get_all()
@@ -163,6 +165,9 @@ class HIDHost(ClassicMixin, BLEMixin):
                     for entry in keys:
                         addr = str(entry[0]) if isinstance(entry, (list, tuple)) else str(entry)
                         self._keystore_addresses.add(normalize_addr(addr))
+                        pairing_keys = entry[1] if isinstance(entry, (list, tuple)) and len(entry) > 1 else None
+                        if pairing_keys is not None and pairing_keys.address_type is not None:
+                            self._keystore_address_types[normalize_addr(addr)] = pairing_keys.address_type
                     log.info(f"Keystore has {len(self._keystore_addresses)} entries")
             except Exception as e:
                 log.warning(f"Failed to load keystore: {e}")
