@@ -105,12 +105,16 @@ class DeviceCache:
                 logger.warning(f"Failed to clear cache for {address}: {e}")
         else:
             try:
-                for filename in os.listdir(self.cache_dir):
-                    if filename.endswith('.json') and filename != 'pairing_keys.json':
+                filenames = os.listdir(self.cache_dir)
+            except OSError:
+                filenames = []
+            for filename in filenames:
+                if filename.endswith('.json') and filename != 'pairing_keys.json':
+                    try:
                         os.remove(os.path.join(self.cache_dir, filename))
                         count += 1
-                logger.info("Cleared all device caches")
-            except Exception as e:
-                logger.warning(f"Failed to clear all caches: {e}")
+                    except OSError as e:
+                        logger.warning(f"Failed to clear {filename}: {e}")
+            logger.info("Cleared all device caches")
         return count
 
