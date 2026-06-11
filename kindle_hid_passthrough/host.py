@@ -6,16 +6,15 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from bumble.core import BT_BR_EDR_TRANSPORT, BT_HUMAN_INTERFACE_DEVICE_SERVICE, InvalidStateError, TimeoutError as BumbleTimeoutError
-from bumble.device import Device, Peer
+from bumble.device import Peer
 from bumble.gatt import (
     GATT_HUMAN_INTERFACE_DEVICE_SERVICE,
     GATT_REPORT_CHARACTERISTIC,
     GATT_REPORT_MAP_CHARACTERISTIC,
 )
-from bumble.hci import Address, HCI_Reset_Command, HCI_Write_Class_Of_Device_Command, HCI_Write_Local_Name_Command, OwnAddressType
+from bumble.hci import Address, HCI_Write_Class_Of_Device_Command, HCI_Write_Local_Name_Command, OwnAddressType
 from bumble.hid import Host as BumbleHIDHost
 from bumble.sdp import Client as SDPClient
-from bumble.transport import open_transport
 
 from ble import BLEMixin
 from classic import ClassicMixin
@@ -23,6 +22,7 @@ from config import Protocol, config, get_version, normalize_addr
 from device_cache import DeviceCache
 from logging_utils import log
 from pairing import create_keystore, create_pairing_config
+from transport import create_bumble_device
 from uhid_handler import Bus, UHIDDevice, strip_digitizer_collections
 
 __all__ = ['HIDHost']
@@ -119,51 +119,17 @@ class HIDHost(ClassicMixin, BLEMixin):
         """Initialize the Bumble device with both protocols."""
         log.info(f"HID Host v{get_version()}")
 
-        if not self.transport_spec:
-            raise RuntimeError("No HCI transport available")
-        log.info("Opening transport...")
+        def configure(device):
+            device.classic_enabled = bool(self.classic_devices)
+            device.le_enabled = bool(self.ble_devices)
+            device.keystore = self.keystore
+            device.pairing_config_factory = lambda conn: create_pairing_config()
+            if self.classic_devices:
+                device.classic_ssp_enabled = True
+                device.classic_sc_enabled = True
 
-        try:
-            self.transport = await asyncio.wait_for(
-                open_transport(self.transport_spec),
-                timeout=config.transport_timeout
-            )
-        except asyncio.TimeoutError:
-            log.error(f"Transport open timed out after {config.transport_timeout}s")
-            raise
-
-        self.device = Device.with_hci(
-            config.device_name,
-            config.device_address,
-            self.transport.source,
-            self.transport.sink
-        )
-
-        # Enable both protocols
-        self.device.classic_enabled = bool(self.classic_devices)
-        self.device.le_enabled = bool(self.ble_devices)
-
-        self.device.keystore = self.keystore
-        self.device.pairing_config_factory = lambda conn: create_pairing_config()
-
-        if self.classic_devices:
-            self.device.classic_ssp_enabled = True
-            self.device.classic_sc_enabled = True
-
-        log.info("Sending HCI Reset...")
-        try:
-            await asyncio.wait_for(
-                self.device.host.send_command(HCI_Reset_Command()),
-                timeout=config.hci_reset_timeout
-            )
-            log.success("HCI Reset successful")
-            await asyncio.sleep(0.2)
-        except asyncio.TimeoutError:
-            log.error("HCI Reset timed out")
-            raise
-
-        await self.device.power_on()
-        log.success(f"Device powered on: {self.device.public_address}")
+        self.transport, self.device = await create_bumble_device(
+            self.transport_spec, configure=configure)
 
         # Classic-specific setup
         if self.classic_devices:

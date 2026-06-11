@@ -6,13 +6,12 @@ from dataclasses import dataclass
 from typing import List
 
 from bumble.core import AdvertisingData, DeviceClass
-from bumble.device import Device
 from bumble.gatt import GATT_HUMAN_INTERFACE_DEVICE_SERVICE
-from bumble.hci import Address, HCI_Reset_Command
-from bumble.transport import open_transport
+from bumble.hci import Address
 
 from config import Protocol, config
 from logging_utils import log
+from transport import create_bumble_device
 
 __all__ = ['Scanner', 'DiscoveredDevice']
 
@@ -50,40 +49,7 @@ class Scanner:
 
     async def start(self):
         """Initialize the Bumble device."""
-        if not self.transport_spec:
-            raise RuntimeError("No HCI transport available")
-        log.info("Scanner: Opening transport...")
-
-        try:
-            self.transport = await asyncio.wait_for(
-                open_transport(self.transport_spec),
-                timeout=config.transport_timeout
-            )
-        except asyncio.TimeoutError:
-            log.error(f"Transport open timed out after {config.transport_timeout}s")
-            raise
-
-        self.device = Device.with_hci(
-            config.device_name,
-            config.device_address,
-            self.transport.source,
-            self.transport.sink
-        )
-
-        log.info("Sending HCI Reset...")
-        try:
-            await asyncio.wait_for(
-                self.device.host.send_command(HCI_Reset_Command()),
-                timeout=config.hci_reset_timeout
-            )
-            log.success("HCI Reset successful")
-            await asyncio.sleep(0.2)
-        except asyncio.TimeoutError:
-            log.error("HCI Reset timed out")
-            raise
-
-        await self.device.power_on()
-        log.success(f"Device powered on: {self.device.public_address}")
+        self.transport, self.device = await create_bumble_device(self.transport_spec)
 
     async def cleanup(self):
         """Clean up resources."""
