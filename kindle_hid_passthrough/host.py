@@ -81,6 +81,7 @@ class HIDHost(ClassicMixin, BLEMixin):
         self._last_report = None
         self._auth_failure_address = None
         self._virtual_cable_unplug_address = None
+        self._radio_lock = None
 
     @property
     def connection_state(self) -> dict:
@@ -206,6 +207,7 @@ class HIDHost(ClassicMixin, BLEMixin):
         """Main run loop - handle both protocols concurrently."""
         self._disconnection_event = asyncio.Event()
         self._connection_future = asyncio.get_event_loop().create_future()
+        self._radio_lock = asyncio.Lock()
 
         self._parse_devices()
         await self.start()

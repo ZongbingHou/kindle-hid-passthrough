@@ -216,6 +216,7 @@ class ClassicMixin:
                 log.info(f"[Classic] Attempt {attempt}: {self._format_device(addr)}")
 
                 target = Address(addr, Address.PUBLIC_DEVICE_ADDRESS)
+                await self._radio_lock.acquire()
                 connect_task = asyncio.create_task(
                     self.device.connect(target, transport=BT_BR_EDR_TRANSPORT)
                 )
@@ -255,6 +256,7 @@ class ClassicMixin:
                         await connect_task
                     except (asyncio.CancelledError, Exception):
                         pass
+                    self._radio_lock.release()
 
             if not self._connection_future.done():
                 await asyncio.sleep(self.ACTIVE_RETRY_INTERVAL)

@@ -135,6 +135,7 @@ class BLEMixin:
                 future.exception()
         pending.add_done_callback(consume_exception)
 
+        await self._radio_lock.acquire()
         self.device.on(Device.EVENT_CONNECTION, on_connection)
         self.device.on(Device.EVENT_CONNECTION_FAILURE, on_failure)
 
@@ -174,6 +175,7 @@ class BLEMixin:
             self.device.le_connecting = False
             self.device.remove_listener(Device.EVENT_CONNECTION, on_connection)
             self.device.remove_listener(Device.EVENT_CONNECTION_FAILURE, on_failure)
+            self._radio_lock.release()
 
     async def _ble_scan_for_rotated(self, known: set, window: float):
         """Scan for bonded devices advertising, including from a rotated
@@ -187,6 +189,7 @@ class BLEMixin:
             if match:
                 rotated.set_result((advertisement.address,) + match)
 
+        await self._radio_lock.acquire()
         self.device.on('advertisement', on_advertisement)
         scanning = False
         try:
@@ -212,6 +215,7 @@ class BLEMixin:
                     await self.device.stop_scanning(legacy=True)
                 except Exception:
                     pass
+            self._radio_lock.release()
 
     def _match_rotated_ble_device(self, advertisement, known: set):
         """Match an advertisement by known address, IRK resolution, or
@@ -271,12 +275,13 @@ class BLEMixin:
             self.device.on('advertisement', on_advertisement)
 
             try:
-                await self.device.start_scanning()
-                for _ in range(20):
-                    if found_device or self._connection_future.done():
-                        break
-                    await asyncio.sleep(0.5)
-                await self.device.stop_scanning()
+                async with self._radio_lock:
+                    await self.device.start_scanning()
+                    for _ in range(20):
+                        if found_device or self._connection_future.done():
+                            break
+                        await asyncio.sleep(0.5)
+                    await self.device.stop_scanning()
             except Exception as e:
                 log.warning(f"[BLE] Scan error: {e}")
             finally:
@@ -290,11 +295,12 @@ class BLEMixin:
                 for attempt in range(1, max_attempts + 1):
                     try:
                         log.info(f"[BLE] Connecting to {found_device.address} (Attempt {attempt}/{max_attempts})...")
-                        self.connection = await self.device.connect(
-                            found_device.address,
-                            own_address_type=OwnAddressType.PUBLIC,
-                            timeout=config.connect_timeout,
-                        )
+                        async with self._radio_lock:
+                            self.connection = await self.device.connect(
+                                found_device.address,
+                                own_address_type=OwnAddressType.PUBLIC,
+                                timeout=config.connect_timeout,
+                            )
 
                         if self._connection_future.done():
                             await self.connection.disconnect()
