@@ -328,6 +328,9 @@ class HIDHost(ClassicMixin, BLEMixin):
             await self.connection.pair()
             log.success("[BLE] Pairing complete!")
 
+            if not self.connection.is_encrypted:
+                raise InvalidStateError("[BLE] Link not encrypted after pairing")
+
             await self._discover_ble_hid_service()
 
             return True
@@ -572,7 +575,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             log.info("[BLE] Using existing connection from pairing")
             if not self.peer:
                 self.peer = Peer(self.connection)
-            log.info("[BLE] Connection already encrypted")
+            await self._ble_restore_or_pair()
 
         await self._setup_ble_hid()
 
