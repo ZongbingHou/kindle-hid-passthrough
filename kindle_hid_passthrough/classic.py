@@ -4,7 +4,7 @@
 import asyncio
 from typing import List
 
-from bumble.core import BT_BR_EDR_TRANSPORT, BT_HUMAN_INTERFACE_DEVICE_SERVICE, InvalidStateError
+from bumble.core import BT_BR_EDR_TRANSPORT, BT_HUMAN_INTERFACE_DEVICE_SERVICE, InvalidStateError, TimeoutError as BumbleTimeoutError
 from bumble.hci import (
     Address,
     HCI_Write_Scan_Enable_Command,
@@ -13,7 +13,7 @@ from bumble.hid import HID_CONTROL_PSM, HID_INTERRUPT_PSM, Message
 from bumble.hid import Host as BumbleHIDHost
 from bumble.sdp import Client as SDPClient
 
-from config import Protocol, normalize_addr
+from config import Protocol, config, normalize_addr
 from logging_utils import log
 
 FALLBACK_HID_DESCRIPTOR = bytes([
@@ -324,6 +324,10 @@ class ClassicMixin:
         """Handle Classic HID report."""
         if len(pdu) < 1:
             return
+        if (pdu[0] >> 4) != Message.MessageType.DATA or \
+                (pdu[0] & 0x0F) != Message.ReportType.INPUT_REPORT:
+            log.debug(f"[Classic] Ignoring non-input interrupt PDU: 0x{pdu[0]:02X}")
+            return
         self._forward_report(pdu[1:])
 
     def _on_virtual_cable_unplug(self):
@@ -331,3 +335,156 @@ class ClassicMixin:
         log.warning("[Classic] Virtual cable unplugged")
         self._virtual_cable_unplug_address = self.current_device_address
         self._disconnection_event.set()
+
+    async def _pair_classic(self, address: str) -> bool:
+        """Pair with a Classic Bluetooth device."""
+        log.info(f"[Classic] Pairing with {address}...")
+
+        try:
+            target_address = Address(address, Address.PUBLIC_DEVICE_ADDRESS)
+            self.connection = await self.device.connect(
+                target_address,
+                transport=BT_BR_EDR_TRANSPORT,
+                timeout=config.connect_timeout,
+            )
+            log.success(f"[Classic] Connected to {address}")
+        except (asyncio.TimeoutError, BumbleTimeoutError):
+            log.error(f"[Classic] Connection timeout after {config.connect_timeout}s")
+            return False
+        except Exception as e:
+            log.error(f"[Classic] Connection failed: {e}")
+            return False
+
+        self.current_device_address = address
+        self.connected_protocol = Protocol.CLASSIC
+
+        link_key_received = asyncio.Event()
+
+        def on_device_link_key(_bd_addr, link_key, key_type):
+            log.success(f"[Classic] Link key received: type={key_type}")
+            link_key_received.set()
+
+        self.device.host.on('link_key', on_device_link_key)
+
+        try:
+            log.info("[Classic] Authenticating...")
+            try:
+                await asyncio.wait_for(self.connection.authenticate(), timeout=30.0)
+                log.success("[Classic] Authentication complete")
+            except Exception as e:
+                log.warning(f"[Classic] Authentication: {e}")
+
+            log.info("[Classic] Waiting for link key...")
+            try:
+                await asyncio.wait_for(link_key_received.wait(), timeout=5.0)
+                log.success("[Classic] Link key saved")
+            except asyncio.TimeoutError:
+                log.warning("[Classic] Link key event timeout (may already be saved)")
+
+            if not self.connection.is_encrypted:
+                log.info("[Classic] Requesting encryption...")
+                try:
+                    await asyncio.wait_for(
+                        self.connection.encrypt(enable=True),
+                        timeout=10.0
+                    )
+                except Exception as e:
+                    log.warning(f"[Classic] Encryption: {e}")
+
+            await self._query_classic_sdp(address)
+
+            if self.keystore:
+                keys = await self.keystore.get(address)
+                if keys and keys.link_key:
+                    log.success("[Classic] Link key verified")
+                else:
+                    log.warning("[Classic] Link key not found in keystore!")
+
+            self.device.host.remove_listener('link_key', on_device_link_key)
+            return True
+
+        except Exception as e:
+            log.error(f"[Classic] Pairing failed: {e}")
+            self.device.host.remove_listener('link_key', on_device_link_key)
+            if self.connection:
+                try:
+                    await self.connection.disconnect()
+                except Exception:
+                    pass
+                self.connection = None
+            return False
+
+    async def _query_classic_sdp(self, address: str = None):
+        """Query SDP for HID descriptor and cache it."""
+        if not self.connection:
+            return
+
+        address = address or self.current_device_address
+
+        log.info("[Classic] Querying SDP...")
+        try:
+            sdp_client = SDPClient(self.connection)
+            await asyncio.wait_for(sdp_client.connect(), timeout=5.0)
+
+            result = await asyncio.wait_for(
+                sdp_client.search_attributes(
+                    [BT_HUMAN_INTERFACE_DEVICE_SERVICE],
+                    [0x0100, 0x0206]
+                ),
+                timeout=10.0
+            )
+
+            if result:
+                for record in result:
+                    for attr in record:
+                        if hasattr(attr, 'id') and attr.id == 0x0206:
+                            self._parse_hid_descriptor_list(attr.value)
+                        elif hasattr(attr, 'id') and attr.id == 0x0100:
+                            try:
+                                name = attr.value.value
+                                if isinstance(name, bytes):
+                                    name = name.decode('utf-8', errors='replace')
+                                self.device_name = str(name)
+                            except Exception:
+                                pass
+
+            await sdp_client.disconnect()
+
+            if self.report_map:
+                self.device_cache.save(address, {
+                    'report_map': self.report_map.hex(),
+                    'device_name': self.device_name or 'Unknown'
+                })
+                log.success(f"[Classic] Cached descriptor ({len(self.report_map)} bytes)")
+        except Exception as e:
+            log.warning(f"[Classic] SDP query failed: {e}")
+
+    async def _continue_classic_after_pairing(self):
+        """Continue Classic connection after pairing."""
+        self.hid_host = BumbleHIDHost(self.device)
+        self.hid_host.on(BumbleHIDHost.EVENT_INTERRUPT_DATA, self._on_classic_interrupt_data)
+        self.hid_host.on(BumbleHIDHost.EVENT_VIRTUAL_CABLE_UNPLUG, self._on_virtual_cable_unplug)
+        log.info("[Classic] HID Host created")
+
+        self.hid_host.on_device_connection(self.connection)
+
+        log.info("[Classic] Connecting to HID control channel...")
+        try:
+            await asyncio.wait_for(self.hid_host.connect_control_channel(), timeout=5.0)
+            log.success("[Classic] HID control channel connected")
+        except Exception as e:
+            log.warning(f"[Classic] Control channel: {e}")
+
+        log.info("[Classic] Connecting to HID interrupt channel...")
+        try:
+            await asyncio.wait_for(self.hid_host.connect_interrupt_channel(), timeout=5.0)
+            log.success("[Classic] HID interrupt channel connected")
+        except Exception as e:
+            log.warning(f"[Classic] Interrupt channel: {e}")
+
+        if not self.hid_host.l2cap_intr_channel:
+            log.error("[Classic] Failed to connect HID interrupt channel")
+            return
+
+        self._classic_set_report_protocol()
+        self._finalize_classic_hid()
