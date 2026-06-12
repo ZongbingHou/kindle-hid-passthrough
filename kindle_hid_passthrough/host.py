@@ -64,7 +64,7 @@ class HIDHost(ClassicMixin, BLEMixin):
         self.current_device_address = None
         self.device_name = None
         self.report_map: Optional[bytes] = None
-        self.hid_reports = {}
+        self.hid_reports = []
 
         self.classic_devices: List[DeviceConfig] = []
         self.ble_devices: List[DeviceConfig] = []

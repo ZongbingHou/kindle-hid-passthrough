@@ -388,12 +388,12 @@ class BLEMixin:
                     pass
 
         if report_type == HID_REPORT_TYPE_INPUT:
-            self.hid_reports[report_id] = char
+            self.hid_reports.append((report_id, char))
             log.info(f"[BLE] Found input report {report_id}")
 
     async def _subscribe_to_ble_reports(self):
         """Subscribe to BLE HID input report notifications."""
-        for report_id, char in self.hid_reports.items():
+        for report_id, char in self.hid_reports:
             try:
                 def make_callback(rid):
                     return lambda value: self._on_ble_hid_report(value, rid)
