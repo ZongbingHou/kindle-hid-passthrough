@@ -8,6 +8,8 @@
 
 A userspace Bluetooth HID host for Amazon Kindle e-readers. Connects Bluetooth HID devices (gamepads, keyboards, remotes) and passes input directly to Linux via UHID.
 
+> **Note:** This project is normally paired with [kindle-button-mapper-rs](https://github.com/zampierilucas/kindle-button-mapper-rs), which maps the connected controller's buttons to Kindle actions (page turns, etc.). Without it, gamepads and remotes connect but don't do anything useful.
+
 ## Overview
 
 This project implements a complete Bluetooth stack in userspace using [Google Bumble](https://github.com/google/bumble), bypassing the Kindle's buggy kernel Bluetooth drivers. HID reports are forwarded to the Linux input subsystem via `/dev/uhid`, making devices appear as native input devices.
