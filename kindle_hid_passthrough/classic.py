@@ -9,7 +9,7 @@ from bumble.hci import (
     Address,
     HCI_Write_Scan_Enable_Command,
 )
-from bumble.hid import HID_CONTROL_PSM, HID_INTERRUPT_PSM
+from bumble.hid import HID_CONTROL_PSM, HID_INTERRUPT_PSM, Message
 from bumble.hid import Host as BumbleHIDHost
 from bumble.sdp import Client as SDPClient
 
@@ -162,6 +162,8 @@ class ClassicMixin:
                     )
                 return
 
+            self._classic_set_report_protocol()
+
             if not self._connection_future.done():
                 self._connection_future.set_result(connection)
 
@@ -214,6 +216,7 @@ class ClassicMixin:
                 log.info(f"[Classic] Attempt {attempt}: {self._format_device(addr)}")
 
                 target = Address(addr, Address.PUBLIC_DEVICE_ADDRESS)
+                await self._radio_lock.acquire()
                 connect_task = asyncio.create_task(
                     self.device.connect(target, transport=BT_BR_EDR_TRANSPORT)
                 )
@@ -253,9 +256,20 @@ class ClassicMixin:
                         await connect_task
                     except (asyncio.CancelledError, Exception):
                         pass
+                    self._radio_lock.release()
 
             if not self._connection_future.done():
                 await asyncio.sleep(self.ACTIVE_RETRY_INTERVAL)
+
+    def _classic_set_report_protocol(self):
+        """Send HIDP SET_PROTOCOL(Report) on the control channel."""
+        if not self.hid_host or not self.hid_host.l2cap_ctrl_channel:
+            return
+        try:
+            self.hid_host.set_protocol(Message.ProtocolMode.REPORT_PROTOCOL)
+            log.info("[Classic] Sent SET_PROTOCOL (Report)")
+        except Exception as e:
+            log.warning(f"[Classic] SET_PROTOCOL failed: {e}")
 
     def _finalize_classic_hid(self):
         """Apply fallback descriptor if needed and create UHID."""
@@ -315,4 +329,5 @@ class ClassicMixin:
     def _on_virtual_cable_unplug(self):
         """Handle virtual cable unplug."""
         log.warning("[Classic] Virtual cable unplugged")
+        self._virtual_cable_unplug_address = self.current_device_address
         self._disconnection_event.set()

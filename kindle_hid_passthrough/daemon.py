@@ -182,13 +182,20 @@ class HIDDaemon:
                 # here avoids a race where both paths run host.cleanup() in
                 # parallel and deadlock on transport/connection teardown.
                 auth_fail_addr = None
+                vc_unplug_addr = None
                 if self.host and not self._suspended:
                     auth_fail_addr = self.host.get_auth_failure_address()
+                    vc_unplug_addr = self.host.get_virtual_cable_unplug_address()
                     try:
                         await self.host.cleanup()
                     except Exception:
                         pass
                     self.host = None
+
+                if vc_unplug_addr:
+                    logger.info(f"Virtual cable unplugged by {vc_unplug_addr}, removing device")
+                    config.remove_device(vc_unplug_addr)
+                    skip_delay = True
 
                 if auth_fail_addr:
                     logger.info(f"Auth failure for {auth_fail_addr}, clearing stale key")

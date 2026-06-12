@@ -64,7 +64,7 @@ class HIDHost(ClassicMixin, BLEMixin):
         self.current_device_address = None
         self.device_name = None
         self.report_map: Optional[bytes] = None
-        self.hid_reports = {}
+        self.hid_reports = []
 
         self.classic_devices: List[DeviceConfig] = []
         self.ble_devices: List[DeviceConfig] = []
@@ -80,6 +80,8 @@ class HIDHost(ClassicMixin, BLEMixin):
         self._connection_future = None
         self._last_report = None
         self._auth_failure_address = None
+        self._virtual_cable_unplug_address = None
+        self._radio_lock = None
 
     @property
     def connection_state(self) -> dict:
@@ -192,19 +194,26 @@ class HIDHost(ClassicMixin, BLEMixin):
             except Exception as e:
                 log.warning(f"Failed to load keystore: {e}")
 
-    def _format_device(self, addr: str) -> str:
-        """Format device address with name if available."""
+    def _configured_name(self, addr: str) -> Optional[str]:
+        """Return the configured devices.conf name for addr, if any."""
+        if not addr:
+            return None
         norm = normalize_addr(addr)
         for dev in self.classic_devices + self.ble_devices:
-            if dev.address == norm:
-                if dev.name:
-                    return f"{dev.name} ({addr})"
-        return addr
+            if dev.address == norm and dev.name:
+                return dev.name
+        return None
+
+    def _format_device(self, addr: str) -> str:
+        """Format device address with name if available."""
+        name = self._configured_name(addr)
+        return f"{name} ({addr})" if name else addr
 
     async def run(self):
         """Main run loop - handle both protocols concurrently."""
         self._disconnection_event = asyncio.Event()
         self._connection_future = asyncio.get_event_loop().create_future()
+        self._radio_lock = asyncio.Lock()
 
         self._parse_devices()
         await self.start()
@@ -543,6 +552,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             log.error("[Classic] Failed to connect HID interrupt channel")
             return
 
+        self._classic_set_report_protocol()
         self._finalize_classic_hid()
 
     async def _continue_ble_after_pairing(self):
@@ -609,7 +619,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             return
 
         try:
-            name = self.device_name or "HID Device"
+            name = self.device_name or self._configured_name(self.current_device_address) or "HID Device"
             descriptor = strip_digitizer_collections(self.report_map)
             self.uhid_device = UHIDDevice(
                 name=name,
@@ -705,4 +715,10 @@ class HIDHost(ClassicMixin, BLEMixin):
         """Get address that had auth failure, if any."""
         addr = self._auth_failure_address
         self._auth_failure_address = None
+        return addr
+
+    def get_virtual_cable_unplug_address(self) -> str:
+        """Get address that sent a virtual cable unplug, if any."""
+        addr = self._virtual_cable_unplug_address
+        self._virtual_cable_unplug_address = None
         return addr

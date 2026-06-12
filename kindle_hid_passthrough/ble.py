@@ -135,6 +135,7 @@ class BLEMixin:
                 future.exception()
         pending.add_done_callback(consume_exception)
 
+        await self._radio_lock.acquire()
         self.device.on(Device.EVENT_CONNECTION, on_connection)
         self.device.on(Device.EVENT_CONNECTION_FAILURE, on_failure)
 
@@ -174,6 +175,7 @@ class BLEMixin:
             self.device.le_connecting = False
             self.device.remove_listener(Device.EVENT_CONNECTION, on_connection)
             self.device.remove_listener(Device.EVENT_CONNECTION_FAILURE, on_failure)
+            self._radio_lock.release()
 
     async def _ble_scan_for_rotated(self, known: set, window: float):
         """Scan for bonded devices advertising, including from a rotated
@@ -187,6 +189,7 @@ class BLEMixin:
             if match:
                 rotated.set_result((advertisement.address,) + match)
 
+        await self._radio_lock.acquire()
         self.device.on('advertisement', on_advertisement)
         scanning = False
         try:
@@ -212,6 +215,7 @@ class BLEMixin:
                     await self.device.stop_scanning(legacy=True)
                 except Exception:
                     pass
+            self._radio_lock.release()
 
     def _match_rotated_ble_device(self, advertisement, known: set):
         """Match an advertisement by known address, IRK resolution, or
@@ -271,12 +275,13 @@ class BLEMixin:
             self.device.on('advertisement', on_advertisement)
 
             try:
-                await self.device.start_scanning()
-                for _ in range(20):
-                    if found_device or self._connection_future.done():
-                        break
-                    await asyncio.sleep(0.5)
-                await self.device.stop_scanning()
+                async with self._radio_lock:
+                    await self.device.start_scanning()
+                    for _ in range(20):
+                        if found_device or self._connection_future.done():
+                            break
+                        await asyncio.sleep(0.5)
+                    await self.device.stop_scanning()
             except Exception as e:
                 log.warning(f"[BLE] Scan error: {e}")
             finally:
@@ -290,11 +295,12 @@ class BLEMixin:
                 for attempt in range(1, max_attempts + 1):
                     try:
                         log.info(f"[BLE] Connecting to {found_device.address} (Attempt {attempt}/{max_attempts})...")
-                        self.connection = await self.device.connect(
-                            found_device.address,
-                            own_address_type=OwnAddressType.PUBLIC,
-                            timeout=config.connect_timeout,
-                        )
+                        async with self._radio_lock:
+                            self.connection = await self.device.connect(
+                                found_device.address,
+                                own_address_type=OwnAddressType.PUBLIC,
+                                timeout=config.connect_timeout,
+                            )
 
                         if self._connection_future.done():
                             await self.connection.disconnect()
@@ -388,12 +394,12 @@ class BLEMixin:
                     pass
 
         if report_type == HID_REPORT_TYPE_INPUT:
-            self.hid_reports[report_id] = char
+            self.hid_reports.append((report_id, char))
             log.info(f"[BLE] Found input report {report_id}")
 
     async def _subscribe_to_ble_reports(self):
         """Subscribe to BLE HID input report notifications."""
-        for report_id, char in self.hid_reports.items():
+        for report_id, char in self.hid_reports:
             try:
                 def make_callback(rid):
                     return lambda value: self._on_ble_hid_report(value, rid)
@@ -404,7 +410,7 @@ class BLEMixin:
                 log.warning(f"[BLE] Failed to subscribe to report {report_id}: {e}")
 
     async def _ble_activate_hid_service(self):
-        """Write Exit Suspend to HID Control Point and read Protocol Mode."""
+        """Write Exit Suspend to HID Control Point and force Report Protocol Mode."""
         if not self.peer:
             log.warning("[BLE] No peer for HID activation")
             return
@@ -434,8 +440,11 @@ class BLEMixin:
                     value = await self.peer.read_value(char)
                     mode = "Report" if bytes(value) == b'\x01' else "Boot"
                     log.info(f"[BLE] Protocol Mode: {mode}")
+                    if bytes(value) != b'\x01':
+                        await self.peer.write_value(char, bytes([0x01]), with_response=False)
+                        log.info("[BLE] Forced Report Protocol Mode")
                 except Exception as e:
-                    log.warning(f"[BLE] Failed to read Protocol Mode: {e}")
+                    log.warning(f"[BLE] Protocol Mode read/write failed: {e}")
 
         if not found_cp:
             log.info(f"[BLE] No HID Control Point characteristic (found {len(hid_service.characteristics)} chars)")
