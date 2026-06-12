@@ -140,7 +140,6 @@ class Scanner:
             addr_str = str(advertisement.address)
             if addr_str in seen_addresses:
                 return
-            seen_addresses.add(addr_str)
 
             # Check for HID service in advertising data
             is_hid = False
@@ -156,24 +155,27 @@ class Scanner:
                             is_hid = True
                             break
 
-            if is_hid:
-                name = 'Unknown'
-                if hasattr(advertisement, 'data') and advertisement.data:
-                    name = advertisement.data.get(AdvertisingData.COMPLETE_LOCAL_NAME) or \
-                           advertisement.data.get(AdvertisingData.SHORTENED_LOCAL_NAME) or 'Unknown'
-                    if isinstance(name, bytes):
-                        name = name.decode('utf-8', errors='replace')
+            if not is_hid:
+                return
+            seen_addresses.add(addr_str)
 
-                device = DiscoveredDevice(
-                    address=addr_str,
-                    name=name,
-                    protocol=Protocol.BLE,
-                    rssi=advertisement.rssi or -100
-                )
-                devices_found.append(device)
-                log.info(f"  Found: {device}")
-                if self.on_device_found:
-                    self.on_device_found(device)
+            name = 'Unknown'
+            if hasattr(advertisement, 'data') and advertisement.data:
+                name = advertisement.data.get(AdvertisingData.COMPLETE_LOCAL_NAME) or \
+                       advertisement.data.get(AdvertisingData.SHORTENED_LOCAL_NAME) or 'Unknown'
+                if isinstance(name, bytes):
+                    name = name.decode('utf-8', errors='replace')
+
+            device = DiscoveredDevice(
+                address=addr_str,
+                name=name,
+                protocol=Protocol.BLE,
+                rssi=advertisement.rssi or -100
+            )
+            devices_found.append(device)
+            log.info(f"  Found: {device}")
+            if self.on_device_found:
+                self.on_device_found(device)
 
         self.device.on('advertisement', on_advertisement)
         try:
