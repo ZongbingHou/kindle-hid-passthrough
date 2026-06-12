@@ -404,7 +404,7 @@ class BLEMixin:
                 log.warning(f"[BLE] Failed to subscribe to report {report_id}: {e}")
 
     async def _ble_activate_hid_service(self):
-        """Write Exit Suspend to HID Control Point and read Protocol Mode."""
+        """Write Exit Suspend to HID Control Point and force Report Protocol Mode."""
         if not self.peer:
             log.warning("[BLE] No peer for HID activation")
             return
@@ -434,8 +434,11 @@ class BLEMixin:
                     value = await self.peer.read_value(char)
                     mode = "Report" if bytes(value) == b'\x01' else "Boot"
                     log.info(f"[BLE] Protocol Mode: {mode}")
+                    if bytes(value) != b'\x01':
+                        await self.peer.write_value(char, bytes([0x01]), with_response=False)
+                        log.info("[BLE] Forced Report Protocol Mode")
                 except Exception as e:
-                    log.warning(f"[BLE] Failed to read Protocol Mode: {e}")
+                    log.warning(f"[BLE] Protocol Mode read/write failed: {e}")
 
         if not found_cp:
             log.info(f"[BLE] No HID Control Point characteristic (found {len(hid_service.characteristics)} chars)")

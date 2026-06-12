@@ -543,6 +543,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             log.error("[Classic] Failed to connect HID interrupt channel")
             return
 
+        self._classic_set_report_protocol()
         self._finalize_classic_hid()
 
     async def _continue_ble_after_pairing(self):
