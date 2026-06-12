@@ -12,7 +12,7 @@ from bumble.gatt import (
     GATT_REPORT_CHARACTERISTIC,
     GATT_REPORT_MAP_CHARACTERISTIC,
 )
-from bumble.hci import Address, HCI_Write_Class_Of_Device_Command, HCI_Write_Local_Name_Command, OwnAddressType
+from bumble.hci import Address, HCI_LE_SET_PRIVACY_MODE_COMMAND, HCI_LE_Set_Privacy_Mode_Command, HCI_Write_Class_Of_Device_Command, HCI_Write_Local_Name_Command, OwnAddressType
 from bumble.hid import Host as BumbleHIDHost
 from bumble.sdp import Client as SDPClient
 
@@ -69,6 +69,7 @@ class HIDHost(ClassicMixin, BLEMixin):
         self.classic_devices: List[DeviceConfig] = []
         self.ble_devices: List[DeviceConfig] = []
         self._keystore_addresses: set = set()
+        self._keystore_address_types: dict = {}
 
         self.keystore = create_keystore(config.pairing_keys_file)
         self.device_cache = DeviceCache(config.cache_dir)
@@ -131,6 +132,10 @@ class HIDHost(ClassicMixin, BLEMixin):
         self.transport, self.device = await create_bumble_device(
             self.transport_spec, configure=configure)
 
+        if self.device.address_resolution_offload:
+            await self._set_device_privacy_modes()
+            log.info("Controller address resolution enabled")
+
         # Classic-specific setup
         if self.classic_devices:
             class_of_device = 0x000104  # Computer/Desktop
@@ -153,9 +158,26 @@ class HIDHost(ClassicMixin, BLEMixin):
         await self._load_keystore_addresses()
 
 
+    async def _set_device_privacy_modes(self):
+        """Keep bonded peers visible when they advertise with their
+        identity address instead of an RPA."""
+        if not self.device.host.supports_command(HCI_LE_SET_PRIVACY_MODE_COMMAND):
+            return
+        for _, address in await self.keystore.get_resolving_keys():
+            try:
+                await self.device.send_command(
+                    HCI_LE_Set_Privacy_Mode_Command(
+                        peer_identity_address_type=address.address_type,
+                        peer_identity_address=address,
+                        privacy_mode=HCI_LE_Set_Privacy_Mode_Command.PrivacyMode.DEVICE_PRIVACY_MODE,
+                    ), check_result=True)
+            except Exception as e:
+                log.warning(f"Privacy mode for {address}: {e}")
+
     async def _load_keystore_addresses(self):
         """Load addresses from keystore for connection filtering."""
         self._keystore_addresses = set()
+        self._keystore_address_types = {}
         if self.keystore:
             try:
                 keys = await self.keystore.get_all()
@@ -163,6 +185,9 @@ class HIDHost(ClassicMixin, BLEMixin):
                     for entry in keys:
                         addr = str(entry[0]) if isinstance(entry, (list, tuple)) else str(entry)
                         self._keystore_addresses.add(normalize_addr(addr))
+                        pairing_keys = entry[1] if isinstance(entry, (list, tuple)) and len(entry) > 1 else None
+                        if pairing_keys is not None and pairing_keys.address_type is not None:
+                            self._keystore_address_types[normalize_addr(addr)] = pairing_keys.address_type
                     log.info(f"Keystore has {len(self._keystore_addresses)} entries")
             except Exception as e:
                 log.warning(f"Failed to load keystore: {e}")

@@ -3,7 +3,7 @@
 
 import asyncio
 
-from bumble.core import BT_LE_TRANSPORT, InvalidStateError
+from bumble.core import AdvertisingData, BT_LE_TRANSPORT, InvalidStateError
 from bumble.device import Device, Peer
 from bumble.gatt import (
     GATT_DEVICE_NAME_CHARACTERISTIC,
@@ -33,6 +33,9 @@ HID_REPORT_TYPE_INPUT = 1
 class BLEMixin:
     """BLE methods for HIDHost."""
 
+    BLE_INIT_WINDOW = 18.0
+    BLE_SCAN_WINDOW = 8.0
+
     async def _run_ble_handler(self):
         """Handle BLE connections."""
         known_addresses = [dev.address for dev in self.ble_devices if dev.address != '*']
@@ -48,50 +51,43 @@ class BLEMixin:
         await self.device.send_command(
             HCI_LE_Clear_Filter_Accept_List_Command(), check_result=True)
 
-        for addr_str in addresses:
+        known = {normalize_addr(a) for a in addresses} | self._keystore_addresses
+
+        for addr_str in sorted(known):
             target = Address(addr_str)
-            await self.device.send_command(
-                HCI_LE_Add_Device_To_Filter_Accept_List_Command(
-                    address_type=target.address_type,
-                    address=target,
-                ), check_result=True)
+            known_type = self._keystore_address_types.get(addr_str)
+            if known_type is not None:
+                entry_types = [known_type & 1]
+            else:
+                entry_types = [Address.PUBLIC_DEVICE_ADDRESS, Address.RANDOM_DEVICE_ADDRESS]
+            for entry_type in entry_types:
+                await self.device.send_command(
+                    HCI_LE_Add_Device_To_Filter_Accept_List_Command(
+                        address_type=entry_type,
+                        address=target,
+                    ), check_result=True)
 
         log.info(f"[BLE] Waiting for {len(addresses)} device(s) (accept list)")
 
-        pending = asyncio.get_running_loop().create_future()
-
-        def on_connection(connection):
-            if connection.transport == BT_LE_TRANSPORT and not pending.done():
-                pending.set_result(connection)
-
-        def on_failure(error):
-            if not pending.done():
-                pending.set_exception(error)
-
-        self.device.on(Device.EVENT_CONNECTION, on_connection)
-        self.device.on(Device.EVENT_CONNECTION_FAILURE, on_failure)
-
         try:
-            self.device.connect_own_address_type = OwnAddressType.PUBLIC
-            self.device.le_connecting = True
+            connection = None
 
-            await self.device.send_command(
-                HCI_LE_Create_Connection_Command(
-                    le_scan_interval=96,
-                    le_scan_window=96,
-                    initiator_filter_policy=1,
-                    peer_address_type=0,
-                    peer_address=Address.ANY,
-                    own_address_type=OwnAddressType.PUBLIC,
-                    connection_interval_min=12,
-                    connection_interval_max=24,
-                    max_latency=0,
-                    supervision_timeout=72,
-                    min_ce_length=0,
-                    max_ce_length=0,
-                ), check_result=True)
+            while connection is None and not self._connection_future.done():
+                matched_dev = None
+                match_kind = None
 
-            connection = await asyncio.shield(pending)
+                connection = await self._ble_initiate(self.BLE_INIT_WINDOW)
+                if connection is not None:
+                    break
+
+                match = await self._ble_scan_for_rotated(known, self.BLE_SCAN_WINDOW)
+                if match:
+                    target_address, matched_dev, match_kind = match
+                    connection = await self._ble_initiate(
+                        config.connect_timeout, peer=target_address)
+
+            if connection is None:
+                return
 
             if self._connection_future.done():
                 await connection.disconnect()
@@ -108,27 +104,152 @@ class BLEMixin:
 
             await self._ble_restore_or_pair()
 
+            if match_kind == 'name' and matched_dev is not None:
+                self._save_rotated_address(matched_dev, normalize_addr(addr_str))
+
             if not self._connection_future.done():
                 self._connection_future.set_result(connection)
 
         except asyncio.CancelledError:
-            try:
-                await self.device.send_command(
-                    HCI_LE_Create_Connection_Cancel_Command())
-            except Exception:
-                pass
             raise
         except Exception as e:
-            log.warning(f"[BLE] Accept list connection failed: {e}")
+            log.warning(f"[BLE] Connection failed: {e}")
+
+    async def _ble_initiate(self, window: float, peer: Address = None):
+        """Legacy create-connection to `peer`, or to the accept list when
+        None. Returns the connection, or None on window timeout."""
+        pending = asyncio.get_running_loop().create_future()
+
+        def on_connection(connection):
+            if connection.transport == BT_LE_TRANSPORT and not pending.done():
+                pending.set_result(connection)
+
+        def on_failure(error):
+            if getattr(error, 'transport', BT_LE_TRANSPORT) != BT_LE_TRANSPORT:
+                return
+            if not pending.done():
+                pending.set_exception(error)
+
+        def consume_exception(future):
+            if not future.cancelled():
+                future.exception()
+        pending.add_done_callback(consume_exception)
+
+        self.device.on(Device.EVENT_CONNECTION, on_connection)
+        self.device.on(Device.EVENT_CONNECTION_FAILURE, on_failure)
+
+        try:
+            self.device.connect_own_address_type = OwnAddressType.PUBLIC
+            self.device.le_connecting = True
+
+            await self.device.send_command(
+                HCI_LE_Create_Connection_Command(
+                    le_scan_interval=96,
+                    le_scan_window=96,
+                    initiator_filter_policy=0 if peer is not None else 1,
+                    peer_address_type=peer.address_type if peer is not None else 0,
+                    peer_address=peer if peer is not None else Address.ANY,
+                    own_address_type=OwnAddressType.PUBLIC,
+                    connection_interval_min=12,
+                    connection_interval_max=24,
+                    max_latency=0,
+                    supervision_timeout=72,
+                    min_ce_length=0,
+                    max_ce_length=0,
+                ), check_result=True)
+
             try:
-                await self.device.send_command(
-                    HCI_LE_Create_Connection_Cancel_Command())
-            except Exception:
-                pass
+                return await asyncio.wait_for(asyncio.shield(pending), timeout=window)
+            except asyncio.TimeoutError:
+                return None
+
         finally:
+            if not pending.done():
+                try:
+                    await self.device.send_command(
+                        HCI_LE_Create_Connection_Cancel_Command())
+                    await asyncio.wait_for(asyncio.shield(pending), timeout=1.0)
+                except Exception:
+                    pass
             self.device.le_connecting = False
             self.device.remove_listener(Device.EVENT_CONNECTION, on_connection)
             self.device.remove_listener(Device.EVENT_CONNECTION_FAILURE, on_failure)
+
+    async def _ble_scan_for_rotated(self, known: set, window: float):
+        """Scan for bonded devices advertising, including from a rotated
+        address. Returns (address, DeviceConfig or None, kind) or None."""
+        rotated = asyncio.get_running_loop().create_future()
+
+        def on_advertisement(advertisement):
+            if rotated.done():
+                return
+            match = self._match_rotated_ble_device(advertisement, known)
+            if match:
+                rotated.set_result((advertisement.address,) + match)
+
+        self.device.on('advertisement', on_advertisement)
+        scanning = False
+        try:
+            await self.device.start_scanning(
+                legacy=True,
+                own_address_type=OwnAddressType.PUBLIC,
+                filter_duplicates=True,
+            )
+            scanning = True
+            try:
+                return await asyncio.wait_for(rotated, timeout=window)
+            except asyncio.TimeoutError:
+                return None
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning(f"[BLE] Rotation scan failed: {e}")
+            return None
+        finally:
+            self.device.remove_listener('advertisement', on_advertisement)
+            if scanning:
+                try:
+                    await self.device.stop_scanning(legacy=True)
+                except Exception:
+                    pass
+
+    def _match_rotated_ble_device(self, advertisement, known: set):
+        """Match an advertisement by known address, IRK resolution, or
+        device name. Returns (DeviceConfig or None, kind) or None."""
+        address = advertisement.address
+        addr_norm = normalize_addr(str(address))
+        if addr_norm in known:
+            dev = next((d for d in self.ble_devices if d.address == addr_norm), None)
+            return (dev, 'known')
+
+        if address.is_resolvable and self.device.address_resolver:
+            resolved = self.device.address_resolver.resolve(address)
+            if resolved:
+                resolved_norm = normalize_addr(str(resolved))
+                if resolved_norm in known:
+                    dev = next((d for d in self.ble_devices if d.address == resolved_norm), None)
+                    log.info(f"[BLE] Resolved {addr_norm} to bonded device "
+                             f"{self._format_device(resolved_norm)}")
+                    return (dev, 'irk')
+
+        name = advertisement.data.get(AdvertisingData.COMPLETE_LOCAL_NAME) or \
+            advertisement.data.get(AdvertisingData.SHORTENED_LOCAL_NAME)
+        if isinstance(name, bytes):
+            name = name.decode('utf-8', errors='replace')
+        if name:
+            dev = next((d for d in self.ble_devices if d.name == name), None)
+            if dev:
+                log.info(f"[BLE] {name} advertising from new address {addr_norm}")
+                return (dev, 'name')
+
+        return None
+
+    def _save_rotated_address(self, dev, new_addr: str):
+        """Save the new address and drop the device's stale entries."""
+        config.add_device(new_addr, Protocol.BLE, dev.name)
+        for old in self.ble_devices:
+            if old.name == dev.name and old.address != new_addr:
+                config.remove_device(old.address)
 
     async def _run_ble_scan_handler(self, target_addresses: set):
         """Fallback BLE handler using active scanning for discovery."""

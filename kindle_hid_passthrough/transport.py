@@ -5,7 +5,7 @@ import asyncio
 import os
 
 from bumble.device import Device
-from bumble.hci import HCI_Reset_Command
+from bumble.hci import HCI_LE_ADD_DEVICE_TO_RESOLVING_LIST_COMMAND, LeFeatureMask
 from bumble.transport import open_transport
 
 from config import config
@@ -88,7 +88,7 @@ async def create_bumble_device(transport_spec=None, configure=None):
         log.info("Sending HCI Reset...")
         try:
             await asyncio.wait_for(
-                device.host.send_command(HCI_Reset_Command()),
+                device.host.reset(),
                 timeout=config.hci_reset_timeout
             )
             log.success("HCI Reset successful")
@@ -96,6 +96,11 @@ async def create_bumble_device(transport_spec=None, configure=None):
         except asyncio.TimeoutError:
             log.error("HCI Reset timed out")
             raise
+
+        device.address_resolution_offload = (
+            device.host.supports_le_features(LeFeatureMask.LL_PRIVACY)
+            and device.host.supports_command(HCI_LE_ADD_DEVICE_TO_RESOLVING_LIST_COMMAND)
+        )
 
         await device.power_on()
         log.success(f"Device powered on: {device.public_address}")
