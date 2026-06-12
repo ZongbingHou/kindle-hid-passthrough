@@ -194,14 +194,20 @@ class HIDHost(ClassicMixin, BLEMixin):
             except Exception as e:
                 log.warning(f"Failed to load keystore: {e}")
 
-    def _format_device(self, addr: str) -> str:
-        """Format device address with name if available."""
+    def _configured_name(self, addr: str) -> Optional[str]:
+        """Return the configured devices.conf name for addr, if any."""
+        if not addr:
+            return None
         norm = normalize_addr(addr)
         for dev in self.classic_devices + self.ble_devices:
-            if dev.address == norm:
-                if dev.name:
-                    return f"{dev.name} ({addr})"
-        return addr
+            if dev.address == norm and dev.name:
+                return dev.name
+        return None
+
+    def _format_device(self, addr: str) -> str:
+        """Format device address with name if available."""
+        name = self._configured_name(addr)
+        return f"{name} ({addr})" if name else addr
 
     async def run(self):
         """Main run loop - handle both protocols concurrently."""
@@ -613,7 +619,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             return
 
         try:
-            name = self.device_name or "HID Device"
+            name = self.device_name or self._configured_name(self.current_device_address) or "HID Device"
             descriptor = strip_digitizer_collections(self.report_map)
             self.uhid_device = UHIDDevice(
                 name=name,
