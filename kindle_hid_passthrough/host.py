@@ -80,6 +80,7 @@ class HIDHost(ClassicMixin, BLEMixin):
         self._connection_future = None
         self._last_report = None
         self._auth_failure_address = None
+        self._virtual_cable_unplug_address = None
 
     @property
     def connection_state(self) -> dict:
@@ -706,4 +707,10 @@ class HIDHost(ClassicMixin, BLEMixin):
         """Get address that had auth failure, if any."""
         addr = self._auth_failure_address
         self._auth_failure_address = None
+        return addr
+
+    def get_virtual_cable_unplug_address(self) -> str:
+        """Get address that sent a virtual cable unplug, if any."""
+        addr = self._virtual_cable_unplug_address
+        self._virtual_cable_unplug_address = None
         return addr

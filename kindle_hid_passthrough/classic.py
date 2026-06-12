@@ -327,4 +327,5 @@ class ClassicMixin:
     def _on_virtual_cable_unplug(self):
         """Handle virtual cable unplug."""
         log.warning("[Classic] Virtual cable unplugged")
+        self._virtual_cable_unplug_address = self.current_device_address
         self._disconnection_event.set()
