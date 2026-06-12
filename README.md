@@ -1,5 +1,11 @@
 # Kindle HID Passthrough
 
+[![Build](https://img.shields.io/github/actions/workflow/status/zampierilucas/kindle-hid-passthrough/build-arm.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white)](https://github.com/zampierilucas/kindle-hid-passthrough/actions/workflows/build-arm.yml)
+[![Release](https://img.shields.io/github/v/release/zampierilucas/kindle-hid-passthrough?style=flat-square&logo=github)](https://github.com/zampierilucas/kindle-hid-passthrough/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/zampierilucas/kindle-hid-passthrough/total?style=flat-square&color=blue)](https://github.com/zampierilucas/kindle-hid-passthrough/releases)
+[![License](https://img.shields.io/github/license/zampierilucas/kindle-hid-passthrough?style=flat-square)](LICENSE)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20me-FF5E5B?style=flat-square&logo=kofi&logoColor=white)](https://ko-fi.com/lzampier)
+
 A userspace Bluetooth HID host for Amazon Kindle e-readers. Connects Bluetooth HID devices (gamepads, keyboards, remotes) and passes input directly to Linux via UHID.
 
 ## Overview
