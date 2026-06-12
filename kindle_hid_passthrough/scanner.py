@@ -155,6 +155,11 @@ class Scanner:
                             is_hid = True
                             break
 
+                if not is_hid:
+                    appearance = advertisement.data.get(AdvertisingData.APPEARANCE)
+                    if appearance is not None and (int(appearance) >> 6) == 0x0F:
+                        is_hid = True
+
             if not is_hid:
                 return
             seen_addresses.add(addr_str)
