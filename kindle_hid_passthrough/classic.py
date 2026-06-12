@@ -324,6 +324,10 @@ class ClassicMixin:
         """Handle Classic HID report."""
         if len(pdu) < 1:
             return
+        if (pdu[0] >> 4) != Message.MessageType.DATA or \
+                (pdu[0] & 0x0F) != Message.ReportType.INPUT_REPORT:
+            log.debug(f"[Classic] Ignoring non-input interrupt PDU: 0x{pdu[0]:02X}")
+            return
         self._forward_report(pdu[1:])
 
     def _on_virtual_cable_unplug(self):
