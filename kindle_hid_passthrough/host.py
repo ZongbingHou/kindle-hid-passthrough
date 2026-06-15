@@ -192,7 +192,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             return None
         norm = normalize_addr(addr)
         for dev in self.classic_devices + self.ble_devices:
-            if dev.address == norm and dev.name:
+            if normalize_addr(dev.address) == norm and dev.name:
                 return dev.name
         return None
 
@@ -274,7 +274,7 @@ class HIDHost(ClassicMixin, BLEMixin):
 
     # ==================== PAIRING ====================
 
-    async def pair_device(self, address: str, protocol: Protocol = None) -> bool:
+    async def pair_device(self, address: str, protocol: Protocol = None, name: str = None) -> bool:
         """Pair with a device (first-time setup)."""
         if protocol is None:
             protocol = Protocol.BLE
@@ -282,10 +282,10 @@ class HIDHost(ClassicMixin, BLEMixin):
         self._parse_devices()
 
         if protocol == Protocol.CLASSIC:
-            self.classic_devices = [DeviceConfig(address=address, protocol=protocol)]
+            self.classic_devices = [DeviceConfig(address=address, protocol=protocol, name=name)]
             self.ble_devices = []
         else:
-            self.ble_devices = [DeviceConfig(address=address, protocol=protocol)]
+            self.ble_devices = [DeviceConfig(address=address, protocol=protocol, name=name)]
             self.classic_devices = []
 
         await self.start()
@@ -361,7 +361,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             return
 
         try:
-            name = self.device_name or self._configured_name(self.current_device_address) or "HID Device"
+            name = self._configured_name(self.current_device_address) or self.device_name or "HID Device"
             descriptor = strip_digitizer_collections(self.report_map)
             self.uhid_device = UHIDDevice(
                 name=name,

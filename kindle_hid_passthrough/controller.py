@@ -154,7 +154,7 @@ class DaemonController:
                 await self.daemon.suspend()
                 config.validate_keystore()
 
-                success = await self.daemon.pair(address, protocol)
+                success = await self.daemon.pair(address, protocol, name)
                 if success:
                     config.add_device(address, protocol, name)
                 self.pair_result = {

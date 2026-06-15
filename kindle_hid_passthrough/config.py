@@ -14,7 +14,7 @@ from kindle_detect import detect_kindle
 if TYPE_CHECKING:
     pass
 
-__version__ = "3.5.0"
+__version__ = "3.6.0"
 __build_sha__ = None  # stamped by build scripts
 
 

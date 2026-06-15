@@ -101,7 +101,7 @@ async def pair_mode(protocol_filter: Protocol = None, sequential: bool = False):
     host = HIDHost()
 
     try:
-        success = await host.pair_device(selected.address, selected.protocol)
+        success = await host.pair_device(selected.address, selected.protocol, selected.name)
 
         if success:
             log.success(f"Paired with {selected.name}")

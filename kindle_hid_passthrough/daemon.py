@@ -74,11 +74,11 @@ class HIDDaemon:
         finally:
             await scanner.cleanup()
 
-    async def pair(self, address, protocol) -> bool:
+    async def pair(self, address, protocol, name=None) -> bool:
         """Pair with a device. Must be called while suspended."""
         host = HIDHost()
         try:
-            success = await host.pair_device(address, protocol)
+            success = await host.pair_device(address, protocol, name)
             if success:
                 self._paired_host = host
                 return True
