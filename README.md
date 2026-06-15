@@ -36,7 +36,8 @@ As this project replaces the original Bluetooth stack, you can't use the default
 ## Requirements
 
 - Jailbroken Kindle
-- Linux kernel with UHID support (`CONFIG_UHID`) - enabled by default on Kindle
+
+Kernels without UHID support are handled automatically: the daemon loads a bundled `uhid.ko` at startup (see [Kernel Modules](#kernel-modules)).
 
 ## Installation
 
@@ -146,12 +147,11 @@ The Kindle's kernel Bluetooth stack has bugs that prevent proper HID pairing. By
 6. **Linux Input**: The kernel parses the HID descriptor and creates `/dev/input/eventX`
 7. **Udev**: Defines the input device as a keyboard and translates keypresses to keyboard input.
 
-### Supported Protocols
+### Kernel Modules
 
-| Protocol | Status | Notes |
-|----------|--------|-------|
-| Classic Bluetooth (BR/EDR) | Working | Gamepads, keyboards |
-| BLE (Bluetooth Low Energy) | Working | Page turners, remotes |
+8th-10th gen Kindle kernels ship without `CONFIG_UHID`. For these, prebuilt `uhid.ko` modules matching each firmware (kernel release + build number + board codename) are bundled in [`docs/modules/`](docs/modules/) and loaded automatically when `/dev/uhid` is missing. If no module matches your firmware, open an issue with the contents of `/etc/version.txt`.
+
+The build recipe for the bundled `uhid.ko` modules is in [`docs/uhid-research.md`](docs/uhid-research.md).
 
 ## Hardware
 
