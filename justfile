@@ -8,17 +8,20 @@ upstart_conf := "/etc/upstart/hid-passthrough.conf"
 log_file := "/var/log/hid_passthrough.log"
 python := "/mnt/us/python3.10-kindle/python3-wrapper.sh"
 
+# Target Kindle SSH host (override: `just host=mykindle deploy`, or set KINDLE_HOST)
+host := env_var_or_default("KINDLE_HOST", "kindle")
+
 default:
     @just --list
 
 # Deploy to Kindle over SSH and start API server
 deploy:
     @echo "Deploying to Kindle..."
-    @just kill
+    @just host={{host}} kill
     @echo "Writing build SHA..."
     git -C {{src_dir}} rev-parse --short HEAD > {{src_dir}}/kindle_hid_passthrough/BUILD_SHA
     @echo "Remounting filesystems as writable..."
-    ssh kindle "/usr/sbin/mntroot rw && mount -o remount,rw /mnt/base-us"
+    ssh {{host}} "/usr/sbin/mntroot rw && mount -o remount,rw /mnt/base-us"
     @echo "Copying all files via tar pipe..."
     (cd {{src_dir}} && tar cf - \
         --transform='s|^kindle_hid_passthrough/hid-passthrough-dev.upstart|etc/upstart/hid-passthrough.conf|' \
@@ -35,24 +38,24 @@ deploy:
         scripts/dev_is_keyboard.sh \
         illusion/BTManager/* \
         illusion/BTManager.sh \
-    ) | ssh kindle "tar xf - -C /"
-    -ssh kindle "udevadm control --reload-rules" 2>/dev/null || true
+    ) | ssh {{host}} "tar xf - -C /"
+    -ssh {{host}} "udevadm control --reload-rules" 2>/dev/null || true
     @echo "Clearing Python bytecode cache..."
-    ssh kindle "rm -rf {{remote_dir}}/__pycache__"
+    ssh {{host}} "rm -rf {{remote_dir}}/__pycache__"
     @echo "Creating cache directory..."
-    ssh kindle "mkdir -p {{remote_dir}}/cache"
+    ssh {{host}} "mkdir -p {{remote_dir}}/cache"
     @echo "Clearing WAF cache..."
-    -ssh kindle "rm -rf /var/local/mesquite/com.lzampier.btmanager /var/local/mesquite/BTManager" 2>/dev/null
-    @just register-waf
+    -ssh {{host}} "rm -rf /var/local/mesquite/com.lzampier.btmanager /var/local/mesquite/BTManager" 2>/dev/null
+    @just host={{host}} register-waf
     @echo "Starting API server..."
-    @just server
-    ssh kindle 'lipc-set-prop com.lab126.appmgrd start app://com.lzampier.btmanager'
+    @just host={{host}} server
+    ssh {{host}} 'lipc-set-prop com.lab126.appmgrd start app://com.lzampier.btmanager'
     @echo "Deployment complete!"
 
 # Register BTManager WAF app in appreg.db and install scriptlet (idempotent)
 register-waf:
     @echo "Registering BTManager WAF app..."
-    ssh kindle 'APP_ID="com.lzampier.btmanager"; \
+    ssh {{host}} 'APP_ID="com.lzampier.btmanager"; \
         APP_DIR="{{remote_dir}}/illusion/BTManager"; \
         SCRIPTLET="{{remote_dir}}/illusion/BTManager.sh"; \
         chmod +x "$SCRIPTLET" 2>/dev/null; \
@@ -66,7 +69,7 @@ register-waf:
 
 # Kill daemon and close WAF app
 kill:
-    -ssh kindle 'lipc-set-prop com.lab126.appmgrd start app://com.lab126.booklet.home 2>/dev/null; \
+    -ssh {{host}} 'lipc-set-prop com.lab126.appmgrd start app://com.lab126.booklet.home 2>/dev/null; \
         /sbin/initctl stop hid-passthrough 2>/dev/null; \
         pkill -9 -f "main.py --daemon" 2>/dev/null; \
         pkill -9 -f daemon.py 2>/dev/null; \
@@ -75,58 +78,58 @@ kill:
 
 # Start daemon + API server
 server:
-    -ssh kindle "pkill -9 -f 'main.py --daemon'" 2>/dev/null || true
-    ssh kindle "sleep 2 && /mnt/us/python3.10-kindle/python3-wrapper.sh /mnt/us/kindle_hid_passthrough/main.py --daemon > /dev/null 2>&1 &"
+    -ssh {{host}} "pkill -9 -f 'main.py --daemon'" 2>/dev/null || true
+    ssh {{host}} "sleep 2 && /mnt/us/python3.10-kindle/python3-wrapper.sh /mnt/us/kindle_hid_passthrough/main.py --daemon > /dev/null 2>&1 &"
     @echo "Daemon + API starting (takes ~8s on Kindle)."
 
 # Check daemon status
 status:
-    ssh kindle "/sbin/initctl status hid-passthrough"
+    ssh {{host}} "/sbin/initctl status hid-passthrough"
 
 # View daemon logs
 logs:
-    ssh kindle "tail -f {{log_file}}"
+    ssh {{host}} "tail -f {{log_file}}"
 
 # View recent logs
 logs-recent:
-    ssh kindle "tail -n 50 {{log_file}}"
+    ssh {{host}} "tail -n 50 {{log_file}}"
 
 # Restart daemon
 restart:
-    ssh kindle "/sbin/initctl restart hid-passthrough"
+    ssh {{host}} "/sbin/initctl restart hid-passthrough"
 
 # Stop daemon
 stop:
-    ssh kindle "/sbin/initctl stop hid-passthrough"
+    ssh {{host}} "/sbin/initctl stop hid-passthrough"
 
 # Start daemon
 start:
-    ssh kindle "/sbin/initctl start hid-passthrough"
+    ssh {{host}} "/sbin/initctl start hid-passthrough"
 
 # Clear cache
 clear-cache:
-    ssh kindle "rm -rf {{remote_dir}}/cache/*.json"
+    ssh {{host}} "rm -rf {{remote_dir}}/cache/*.json"
     @echo "Cache cleared!"
 
 # Show cache
 show-cache:
-    ssh kindle "ls -lh {{remote_dir}}/cache/ 2>/dev/null || echo 'Empty'"
+    ssh {{host}} "ls -lh {{remote_dir}}/cache/ 2>/dev/null || echo 'Empty'"
 
 # Show configured devices
 devices:
-    @ssh kindle "cat {{remote_dir}}/devices.conf 2>/dev/null || echo 'No devices configured'"
+    @ssh {{host}} "cat {{remote_dir}}/devices.conf 2>/dev/null || echo 'No devices configured'"
 
 # Edit devices.conf
 edit-devices:
-    ssh kindle "vi {{remote_dir}}/devices.conf"
+    ssh {{host}} "vi {{remote_dir}}/devices.conf"
 
 # Show pairing keys
 keys:
-    @ssh kindle "cat {{remote_dir}}/cache/pairing_keys.json 2>/dev/null | python3 -m json.tool || echo 'No pairing keys'"
+    @ssh {{host}} "cat {{remote_dir}}/cache/pairing_keys.json 2>/dev/null | python3 -m json.tool || echo 'No pairing keys'"
 
 # SSH into Kindle
 ssh:
-    ssh kindle
+    ssh {{host}}
 
 # Check Python syntax
 check:
@@ -139,19 +142,19 @@ mock-server:
 
 # Deploy and follow logs
 deploy-watch: deploy
-    @just logs
+    @just host={{host}} logs
 
 # Pair a new device (Classic)
 pair-classic:
-    ssh kindle "{{python}} {{remote_dir}}/main.py --pair --protocol classic"
+    ssh {{host}} "{{python}} {{remote_dir}}/main.py --pair --protocol classic"
 
 # Pair a new device (BLE)
 pair-ble:
-    ssh kindle "{{python}} {{remote_dir}}/main.py --pair --protocol ble"
+    ssh {{host}} "{{python}} {{remote_dir}}/main.py --pair --protocol ble"
 
 # Run manually (for debugging)
 run:
-    ssh kindle "{{python}} {{remote_dir}}/main.py"
+    ssh {{host}} "{{python}} {{remote_dir}}/main.py"
 
 # Deploy KOReader plugin to Kindle
 deploy-koreader:
@@ -159,14 +162,14 @@ deploy-koreader:
     (cd {{src_dir}} && tar cf - \
         --transform='s|^koreader-plugin/hidpassthrough.koplugin/|mnt/us/koreader/plugins/hidpassthrough.koplugin/|' \
         koreader-plugin/hidpassthrough.koplugin/ \
-    ) | ssh kindle "tar xf - -C /"
+    ) | ssh {{host}} "tar xf - -C /"
     @echo "KOReader plugin deployed!"
 
 # Remove autostart (removes upstart config)
 remove-autostart:
     @echo "Removing autostart..."
-    ssh kindle "/usr/sbin/mntroot rw"
-    ssh kindle "rm -f {{upstart_conf}}"
+    ssh {{host}} "/usr/sbin/mntroot rw"
+    ssh {{host}} "rm -f {{upstart_conf}}"
     @echo "Autostart removed."
 
 # --- Install from pre-built tarball ---
@@ -201,14 +204,14 @@ install-release source="":
         tarball="$tmpdir/{{tarball_name}}"
     fi
     echo "Installing to Kindle..."
-    just kill
-    ssh kindle "/usr/sbin/mntroot rw && mount -o remount,rw /mnt/base-us"
-    ssh kindle "mkdir -p {{remote_dir}}"
-    cat "$tarball" | ssh kindle "tar xzf - -C {{remote_dir}}"
-    ssh kindle "cd {{remote_dir}} && sh scripts/install.sh installAll"
-    ssh kindle "/usr/sbin/mntroot ro"
-    ssh kindle "/sbin/initctl start hid-passthrough"
-    ssh kindle 'lipc-set-prop com.lab126.appmgrd start app://com.lzampier.btmanager'
+    just host={{host}} kill
+    ssh {{host}} "/usr/sbin/mntroot rw && mount -o remount,rw /mnt/base-us"
+    ssh {{host}} "mkdir -p {{remote_dir}}"
+    cat "$tarball" | ssh {{host}} "tar xzf - -C {{remote_dir}}"
+    ssh {{host}} "cd {{remote_dir}} && sh scripts/install.sh installAll"
+    ssh {{host}} "/usr/sbin/mntroot ro"
+    ssh {{host}} "/sbin/initctl start hid-passthrough"
+    ssh {{host}} 'lipc-set-prop com.lab126.appmgrd start app://com.lzampier.btmanager'
     echo "Install complete!"
 
 # Install from latest CI build artifact
@@ -241,7 +244,7 @@ install-ci branch="main":
         ls -la "$tmpdir"/
         exit 1
     fi
-    just install-release "$tarball"
+    just host={{host}} install-release "$tarball"
 
 # Bump __version__, commit to main, tag, and push (usage: just version-bump 3.3.5)
 version-bump version:
@@ -278,18 +281,18 @@ version-bump version:
 # Uninstall system integration (upstart, udev, WAF app) but leave code in place
 uninstall:
     @echo "Uninstalling system integration..."
-    @just kill
+    @just host={{host}} kill
     @echo "Remounting filesystems as writable..."
-    ssh kindle "/usr/sbin/mntroot rw"
+    ssh {{host}} "/usr/sbin/mntroot rw"
     @echo "Removing upstart config..."
-    -ssh kindle "rm -f {{upstart_conf}}"
+    -ssh {{host}} "rm -f {{upstart_conf}}"
     @echo "Removing udev rules..."
-    -ssh kindle "rm -f /etc/udev/rules.d/99-hid-keyboard.rules"
-    -ssh kindle "/usr/sbin/udevadm control --reload-rules"
+    -ssh {{host}} "rm -f /etc/udev/rules.d/99-hid-keyboard.rules"
+    -ssh {{host}} "/usr/sbin/udevadm control --reload-rules"
     @echo "Removing legacy helper script (pre-/mnt/us layout)..."
-    -ssh kindle "[ -f /usr/local/bin/dev_is_keyboard.sh ] && rm -f /usr/local/bin/dev_is_keyboard.sh"
+    -ssh {{host}} "[ -f /usr/local/bin/dev_is_keyboard.sh ] && rm -f /usr/local/bin/dev_is_keyboard.sh"
     @echo "Removing WAF app scriptlet..."
-    -ssh kindle "rm -f /mnt/us/documents/BTManager.sh"
+    -ssh {{host}} "rm -f /mnt/us/documents/BTManager.sh"
     @echo "Remounting read-only..."
-    -ssh kindle "/usr/sbin/mntroot ro"
+    -ssh {{host}} "/usr/sbin/mntroot ro"
     @echo "Uninstall complete. Code left at {{remote_dir}}/"
