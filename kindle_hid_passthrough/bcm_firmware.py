@@ -69,8 +69,9 @@ def prepare_chip_hardware():
     time.sleep(POWER_ON_SETTLE)
 
     try:
+        # dev_wake is ACTIVE_LOW: '0' asserts (wakes the chip), '1' lets it sleep
         with open(BT_DEV_WAKE_PATH, 'w') as f:
-            f.write('1')
+            f.write('0')
         log.info(f"BT dev_wake asserted via {BT_DEV_WAKE_PATH}")
         time.sleep(RESET_SETTLE)
     except OSError:
@@ -121,7 +122,8 @@ def _send_cmd(port, opcode, params=b''):
     """
     cmd = _build_hci_cmd(opcode, params)
     port.write(cmd)
-    port.flush()
+    # no port.flush()/tcdrain here: it isn't covered by write_timeout and blocks
+    # forever if the chip never drains the UART. write() already queued the bytes.
 
     event = _read_event(port)
     if event is None:
@@ -212,8 +214,9 @@ def download_firmware(device_path, firmware_dir, baud_rate=115200):
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
-        rtscts=False,
+        rtscts=True,                  # BCM bootloader requires HW flow control
         timeout=CMD_TIMEOUT,
+        write_timeout=CMD_TIMEOUT,    # never block forever on a stalled write
     )
 
     try:

@@ -267,11 +267,11 @@ def _prepare_brcm(kindle, settle_time):
         log.error("BCM chip hardware bring-up failed")
         return False
 
-    # if not download_firmware(device_path, kindle.firmware_dir, kindle.baud_rate or 115200):
-    #     log.error("BCM firmware download failed")
-    #     return False
+    if not download_firmware(device_path, kindle.firmware_dir, kindle.baud_rate or 115200):
+        log.error("BCM firmware download failed")
+        return False
 
-    log.info(f"{device_path} ready (firmware download skipped)")
+    log.info(f"{device_path} ready")
     return True
 
 
