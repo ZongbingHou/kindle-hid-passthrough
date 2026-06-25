@@ -20,9 +20,15 @@ import signal
 import subprocess
 import time
 
-from bcm_firmware import download_firmware, prepare_chip_hardware
 from kindle_detect import detect_codename, detect_kindle
 from logging_utils import log
+
+# Broadcom warm-handoff knobs
+BT_DEV_WAKE_PATH = '/proc/bluetooth/sleep/btwake'
+BT_SLEEP_PROTO_PATH = '/proc/bluetooth/sleep/proto'
+BTENABLE_LIPC = ['lipc-set-prop', 'com.lab126.btfd', 'BTenable', '1:1']
+BSA_WARMUP_TIMEOUT = 12.0   # seconds to wait for bsa_server after BTenable
+BSA_FIRMWARE_SETTLE = 2.0   # let bsa finish the .hcd download before we take over
 
 # Known BT kernel module patterns across Kindle versions
 DEFAULT_MODULE_PATTERNS = [
@@ -251,27 +257,132 @@ def prepare_bt(transport_spec=None, module_patterns=None, settle_time=0.5):
     return _prepare_standard(device_path, module_patterns, settle_time)
 
 
-def _prepare_brcm(kindle, settle_time):
-    """Prepare Broadcom BCM4343 hardware."""
-    device_path = kindle.device_path
+def _pgrep_x(name):
+    """Return PIDs whose process name exactly matches `name`."""
+    try:
+        r = subprocess.run(['pgrep', '-x', name],
+                           capture_output=True, text=True, timeout=5)
+        return [int(p) for p in r.stdout.split() if p.isdigit()]
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        return []
 
-    log.info(f"Freeing {device_path} from BSA...")
-    if _free_device(device_path) and settle_time > 0:
-        time.sleep(settle_time)
+
+def _wait_for_bsa():
+    """Wait for bsa_server to appear (chip warmed). Returns True on success."""
+    deadline = time.monotonic() + BSA_WARMUP_TIMEOUT
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        if _pgrep_x('bsa_server'):
+            log.info("bsa_server up; BCM chip warmed")
+            time.sleep(BSA_FIRMWARE_SETTLE)  # let the .hcd download finish
+            return True
+    return False
+
+
+def _warm_up_chip():
+    """Have Amazon's BT stack bring the chip up (loads .hcd firmware, warms the
+    UART clock). This cold bring-up is timing-critical and wedges the kernel if
+    we attempt it ourselves; bsa_server does it safely.
+
+    Returns True once bsa_server is running (chip warm).
+    """
+    if _pgrep_x('bsa_server'):
+        log.info("bsa_server already running; BCM chip is warm")
+        return True
+
+    log.info("Warming BCM chip via btfd (BTenable)...")
+    _run(BTENABLE_LIPC)
+    if _wait_for_bsa():
+        return True
+
+    # A previous handoff may have left btd frozen (SIGSTOP) with its bsa child
+    # killed. Unfreeze it first (otherwise initctl can't stop it and hangs),
+    # then restart so it will respawn bsa. The UART must be free here.
+    log.warning("bsa_server didn't start; recovering btd")
+    for pid in _pgrep_x('btd'):
+        try:
+            os.kill(pid, signal.SIGCONT)
+        except OSError:
+            pass
+    _run(['initctl', 'restart', 'btd'])
+    time.sleep(2.0)
+    _run(BTENABLE_LIPC)
+    return _wait_for_bsa()
+
+
+def _handoff_from_bsa(device_path):
+    """Take the warm UART from bsa_server: freeze btd so it can't respawn bsa,
+    SIGKILL bsa, and free the device. The chip stays warm because btenable is
+    left untouched (the chip keeps its firmware and clock state).
+    """
+    for pid in _pgrep_x('btd'):
+        try:
+            os.kill(pid, signal.SIGSTOP)
+            log.info(f"Froze btd ({pid}) so it won't respawn bsa_server")
+        except OSError as e:
+            log.warning(f"Could not SIGSTOP btd {pid}: {e}")
+
+    for pid in _pgrep_x('bsa_server'):
+        try:
+            os.kill(pid, signal.SIGKILL)
+            log.info(f"Killed bsa_server ({pid}); taking the UART")
+        except OSError as e:
+            log.warning(f"Could not kill bsa_server {pid}: {e}")
+
+    time.sleep(0.5)
+    _free_device(device_path)
+    time.sleep(0.3)
+
+
+def wake_brcm_chip():
+    """Wake the warm BCM chip and keep it awake so it answers HCI.
+
+    MUST be called AFTER the UART transport is open: these writes wedge a cold
+    chip, but on the warm chip (firmware loaded by bsa, clock running) they are
+    safe. Two steps:
+      1. dev_wake=0  -> wake the chip out of bluesleep.
+      2. proto=0     -> disable bluesleep, so it doesn't sleep again mid-scan
+                        (otherwise it goes silent after ~20s and HCI times out).
+    No-op on non-Broadcom Kindles (the proc files don't exist).
+    """
+    if not os.path.exists(BT_DEV_WAKE_PATH):
+        return
+    try:
+        with open(BT_DEV_WAKE_PATH, 'w') as f:
+            f.write('0')
+        log.info("BCM chip woken (dev_wake asserted)")
+        time.sleep(0.3)
+    except OSError as e:
+        log.warning(f"Could not assert dev_wake: {e}")
+    try:
+        with open(BT_SLEEP_PROTO_PATH, 'w') as f:
+            f.write('0')
+        log.info("BCM bluesleep disabled (chip stays awake)")
+        time.sleep(0.2)
+    except OSError as e:
+        log.warning(f"Could not disable bluesleep: {e}")
+
+
+def _prepare_brcm(kindle, settle_time):
+    """Prepare Broadcom BCM4343 hardware via warm handoff from bsa_server.
+
+    bsa loads the firmware and warms the UART clock (the cold bring-up that
+    wedges the kernel if we do it ourselves); we then take the running UART.
+    The chip is woken later, once the transport is open (see wake_brcm_chip).
+    """
+    device_path = kindle.device_path
 
     if not os.path.exists(device_path):
         log.error(f"{device_path} does not exist")
         return False
 
-    if not prepare_chip_hardware():
-        log.error("BCM chip hardware bring-up failed")
+    if not _warm_up_chip():
+        log.error("Could not warm the BCM chip via bsa_server")
         return False
 
-    if not download_firmware(device_path, kindle.firmware_dir, kindle.baud_rate or 115200):
-        log.error("BCM firmware download failed")
-        return False
+    _handoff_from_bsa(device_path)
 
-    log.info(f"{device_path} ready")
+    log.info(f"{device_path} ready (warm handoff complete; wake deferred to open)")
     return True
 
 

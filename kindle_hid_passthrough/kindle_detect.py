@@ -49,14 +49,15 @@ _MTK_HW = dict(
     transport_scheme='file',
 )
 
-# Broadcom BCM4343 over UART. Amazon's BSA daemon (bsa_server) normally owns
-# the UART, but the chip itself speaks standard HCI. We kill bsa_server and
-# talk HCI directly, downloading .hcd firmware first.
+# Broadcom BCM4343 over UART. Amazon's BSA daemon (bsa_server) owns the UART and
+# does the timing-critical firmware download / clock bring-up (which wedges the
+# kernel if we attempt it cold ourselves). We let bsa warm the chip, then take
+# the running UART from it (warm handoff) and talk standard HCI at its 2M baud.
 _BRCM_HW = dict(
     device_path='/dev/ttymxc2',
     kernel_module=None,
     transport_scheme='serial',
-    baud_rate=115200,
+    baud_rate=2000000,
     flow_control='rtscts',
     firmware_dir='/opt/brcm_4343w/bluetooth/firmware',
 )

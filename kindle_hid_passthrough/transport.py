@@ -74,6 +74,11 @@ async def create_bumble_device(transport_spec=None, configure=None):
         log.error(f"Transport open timed out after {config.transport_timeout}s")
         raise
 
+    # Broadcom (warm handoff): wake the chip now that the UART is open. No-op on
+    # other Kindles. Must be after open and before the first HCI command.
+    from bt_setup import wake_brcm_chip
+    wake_brcm_chip()
+
     try:
         device = Device.with_hci(
             config.device_name,

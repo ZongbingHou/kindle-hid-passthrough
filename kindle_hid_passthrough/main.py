@@ -55,16 +55,22 @@ async def pair_mode(protocol_filter: Protocol = None, sequential: bool = False):
             while not devices:
                 stop_event = asyncio.Event()
                 loop = asyncio.get_event_loop()
-                loop.add_reader(sys.stdin.fileno(), stop_event.set)
+                stdin_watched = False
+                try:
+                    loop.add_reader(sys.stdin.fileno(), stop_event.set)
+                    stdin_watched = True
+                except (OSError, ValueError):
+                    pass  # stdin not pollable (headless/service): just scan
                 try:
                     all_devices = await scanner.scan(
                         duration=10.0, concurrent=not sequential,
                         stop_event=stop_event
                     )
                 finally:
-                    loop.remove_reader(sys.stdin.fileno())
-                    if stop_event.is_set():
-                        sys.stdin.readline()  # consume the Enter
+                    if stdin_watched:
+                        loop.remove_reader(sys.stdin.fileno())
+                        if stop_event.is_set():
+                            sys.stdin.readline()  # consume the Enter
                 if protocol_filter:
                     devices = [d for d in all_devices if d.protocol == protocol_filter]
                 else:
