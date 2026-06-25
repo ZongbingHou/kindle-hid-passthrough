@@ -149,7 +149,7 @@ The Kindle's kernel Bluetooth stack has bugs that prevent proper HID pairing. By
 
 ### Kernel Modules
 
-8th-10th gen Kindle kernels ship without `CONFIG_UHID`. For these, prebuilt `uhid.ko` modules matching each firmware (kernel release + build number + board codename) are bundled in [`docs/modules/`](docs/modules/) and loaded automatically when `/dev/uhid` is missing. If no module matches your firmware, open an issue with the contents of `/etc/version.txt`.
+8th-10th gen Kindle kernels ship without `CONFIG_UHID`. For these, prebuilt `uhid.ko` modules matching each firmware (kernel release + build number + board codename) are bundled in [`kindle_hid_passthrough/modules/`](kindle_hid_passthrough/modules/) and loaded automatically when `/dev/uhid` is missing. If no module matches your firmware, open an issue with the contents of `/etc/version.txt`.
 
 The build recipe for the bundled `uhid.ko` modules is in [`docs/uhid-research.md`](docs/uhid-research.md).
 

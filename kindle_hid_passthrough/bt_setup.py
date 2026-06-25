@@ -37,7 +37,7 @@ DEFAULT_MODULE_PATTERNS = [
 ]
 
 BUNDLED_MODULES_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), '..', 'docs', 'modules'
+    os.path.dirname(os.path.abspath(__file__)), 'modules'
 )
 VERSION_TXT = '/etc/version.txt'
 

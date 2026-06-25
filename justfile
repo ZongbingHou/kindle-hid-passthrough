@@ -34,6 +34,7 @@ deploy:
         kindle_hid_passthrough/config.ini \
         kindle_hid_passthrough/BUILD_SHA \
         kindle_hid_passthrough/hid-passthrough-dev.upstart \
+        kindle_hid_passthrough/modules/*.ko \
         assets/99-hid-keyboard.rules \
         scripts/dev_is_keyboard.sh \
         illusion/BTManager/* \
