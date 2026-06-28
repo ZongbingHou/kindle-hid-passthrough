@@ -213,7 +213,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True})
         threading.Thread(
             target=lambda: subprocess.run(
-                ["pkill", "-TERM", "-f", "mesquite.*BTManager"],
+                ["lipc-set-prop", "com.lab126.appmgrd", "stop",
+                 "app://com.lzampier.btmanager"],
                 timeout=5,
             ),
             daemon=True,
