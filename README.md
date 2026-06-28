@@ -15,7 +15,9 @@ A userspace Bluetooth HID host for Amazon Kindle e-readers. Connects Bluetooth H
 This project implements a complete Bluetooth stack in userspace using [Google Bumble](https://github.com/google/bumble), bypassing the Kindle's buggy kernel Bluetooth drivers. HID reports are forwarded to the Linux input subsystem via `/dev/uhid`, making devices appear as native input devices.
 
 ```
-BT HID Device  -->  /dev/stpbt  -->  Bumble (userspace BT stack)  -->  /dev/uhid  -->  Linux input (/dev/input/eventX)  -->  Keypresses
+                ┌─ /dev/stpbt    (MediaTek, 11th gen+)
+BT HID Device ──┤                                          ──>  Bumble (userspace BT stack)  ──>  /dev/uhid  ──>  /dev/input/eventX  ──>  Keypresses
+                └─ /dev/ttymxc2  (Broadcom UART, 8th-10th gen)
 ```
 
 ## Features
@@ -139,7 +141,7 @@ The Kindle's kernel Bluetooth stack has bugs that prevent proper HID pairing. By
 
 ### Architecture
 
-1. **Transport**: Bumble communicates with the Bluetooth hardware via `/dev/stpbt`
+1. **Transport**: Bumble drives the Bluetooth hardware via `/dev/stpbt` (MediaTek, 11th gen+) or `/dev/ttymxc2` (Broadcom BCM4343 UART, 8th-10th gen — the daemon takes over the running UART from Amazon's `bsa_server` after it loads the chip firmware)
 2. **Protocol**: Supports both Classic Bluetooth (BR/EDR) and BLE HID profiles
 3. **Pairing**: Handles SSP (Secure Simple Pairing) with link key persistence
 4. **HID Reports**: Received via L2CAP (Classic) or GATT notifications (BLE)
@@ -156,10 +158,18 @@ The build recipe for the bundled `uhid.ko` modules is in [`docs/uhid-research.md
 ## Hardware
 
 Tested on:
+
+**MediaTek (11th gen+)**
 - **Device**: Kindle MT8110 Bellatrix
 - **SoC**: MediaTek MT8512 (ARMv7-A Cortex-A53)
 - **Kernel**: Linux 4.9.77-lab126
 - **Bluetooth**: MediaTek CONSYS via `/dev/stpbt`
+
+**Broadcom (8th-10th gen)**
+- **Device**: Kindle Basic 3 (Rex)
+- **SoC**: NXP i.MX6SLL (ARMv7-A Cortex-A9)
+- **Kernel**: Linux 4.1.15-lab126
+- **Bluetooth**: Broadcom BCM4343 via `/dev/ttymxc2` (UART)
 
 ## Troubleshooting
 
