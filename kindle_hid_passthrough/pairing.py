@@ -36,13 +36,13 @@ def create_pairing_config(conn=None) -> PairingConfig:
     """Create pairing configuration; relaxed for Classic, strict for BLE."""
     transport = getattr(conn, 'transport', None) if conn is not None else None
     if transport == BT_BR_EDR_TRANSPORT:
-        log.info("[Pairing] Classic config: sc=False, mitm=False, DisplayOnly")
+        log.info("[Pairing] Classic config: sc=False, mitm=False, NoInputNoOutput")
         return PairingConfig(
             sc=False,
             mitm=False,
             bonding=True,
             delegate=AutoAcceptPairingDelegate(
-                io_capability=PairingDelegate.DISPLAY_OUTPUT_ONLY
+                io_capability=PairingDelegate.NO_OUTPUT_NO_INPUT
             ),
         )
 
