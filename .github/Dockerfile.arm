@@ -40,6 +40,7 @@ WORKDIR /build
 COPY kindle_hid_passthrough/*.py /build/kindle_hid_passthrough/
 COPY kindle_hid_passthrough/config.ini /build/kindle_hid_passthrough/
 COPY kindle_hid_passthrough/BUILD_SHA /build/kindle_hid_passthrough/
+COPY kindle_hid_passthrough/modules/ /build/kindle_hid_passthrough/modules/
 
 # ARM-specific compiler flags to fix branch range errors
 ENV CFLAGS="-O3 -mword-relocations -mlong-calls -ffunction-sections -fdata-sections"
@@ -75,6 +76,7 @@ RUN --mount=type=cache,target=/nuitka-cache \
     --include-package=kindle_hid_passthrough \
     --include-data-file=kindle_hid_passthrough/config.ini=kindle_hid_passthrough/config.ini \
     --include-data-file=kindle_hid_passthrough/BUILD_SHA=kindle_hid_passthrough/BUILD_SHA \
+    --include-data-dir=kindle_hid_passthrough/modules=kindle_hid_passthrough/modules \
     --nofollow-import-to=pytest \
     --nofollow-import-to=unittest \
     --nofollow-import-to=setuptools \
