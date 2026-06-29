@@ -33,14 +33,32 @@ def make_chip(kindle):
     return MtkChip(kindle)
 
 
-def _read_firmware_build():
+def _read_version_line():
     try:
         with open(VERSION_TXT) as f:
-            line = f.readline()
+            return f.readline().strip()
     except OSError:
         return None
-    m = re.search(r'-(\d+)\s*$', line.strip())
+
+
+def _read_firmware_build():
+    line = _read_version_line()
+    if not line:
+        return None
+    m = re.search(r'-(\d+)\s*$', line)
     return m.group(1) if m else None
+
+
+def _log_missing_kmod(codename, expected=None):
+    kindle = detect_kindle()
+    log.error("no bundled uhid.ko for this Kindle; we need to build one")
+    if expected:
+        log.error(f"  module needed : {expected}")
+    log.error(f"  model         : {kindle.model_name if kindle else 'unknown'}")
+    log.error(f"  codename      : {codename}")
+    log.error(f"  kernel        : {os.uname().release}")
+    log.error(f"  version.txt   : {_read_version_line() or 'unreadable'}")
+    log.error("  ^ open an issue with these lines so we can compile the module")
 
 
 def _ensure_uhid():
@@ -52,14 +70,13 @@ def _ensure_uhid():
         return False
     build = _read_firmware_build()
     if not build:
-        log.error(f"could not read build from {VERSION_TXT}")
+        _log_missing_kmod(codename)
         return False
     kernel = os.uname().release
     expected = f"uhid-{kernel}-{build}-{codename}.ko"
     ko = os.path.join(BUNDLED_MODULES_DIR, expected)
     if not os.path.exists(ko):
-        log.error(f"no bundled uhid.ko matching {expected}")
-        log.error("please file an issue with /etc/version.txt output")
+        _log_missing_kmod(codename, expected)
         return False
     log.info(f"loading {expected}")
     if not run(['/sbin/insmod', ko]):
