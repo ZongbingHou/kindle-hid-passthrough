@@ -10,10 +10,27 @@ from bt_mtk import MtkChip
 from kindle_detect import detect_codename, detect_kindle
 from logging_utils import log
 
-BUNDLED_MODULES_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), 'modules'
-)
 VERSION_TXT = '/etc/version.txt'
+
+
+def _module_search_dirs():
+    here = os.path.dirname(os.path.abspath(__file__))
+    base = os.environ.get('KINDLE_HID_BASE', '/mnt/us/kindle_hid_passthrough')
+    dirs = [
+        os.path.join(here, 'modules'),
+        os.path.join(base, 'dist', 'kindle_hid_passthrough', 'modules'),
+        os.path.join(base, 'modules'),
+    ]
+    seen = set()
+    return [d for d in dirs if not (d in seen or seen.add(d))]
+
+
+def _find_bundled_ko(name):
+    for d in _module_search_dirs():
+        ko = os.path.join(d, name)
+        if os.path.exists(ko):
+            return ko
+    return None
 
 _chip = None
 
@@ -58,6 +75,7 @@ def _log_missing_kmod(codename, expected=None):
     log.error(f"  codename      : {codename}")
     log.error(f"  kernel        : {os.uname().release}")
     log.error(f"  version.txt   : {_read_version_line() or 'unreadable'}")
+    log.error(f"  searched      : {', '.join(_module_search_dirs())}")
     log.error("  ^ open an issue with these lines so we can compile the module")
 
 
@@ -74,8 +92,8 @@ def _ensure_uhid():
         return False
     kernel = os.uname().release
     expected = f"uhid-{kernel}-{build}-{codename}.ko"
-    ko = os.path.join(BUNDLED_MODULES_DIR, expected)
-    if not os.path.exists(ko):
+    ko = _find_bundled_ko(expected)
+    if ko is None:
         _log_missing_kmod(codename, expected)
         return False
     log.info(f"loading {expected}")
