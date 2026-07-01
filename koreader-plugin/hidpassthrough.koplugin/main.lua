@@ -203,6 +203,14 @@ do
     end
 end
 
+-- NO_RECAP silences fbink_input_check's per-device log line. Absent on older
+-- koreader-base builds, so resolve defensively.
+local INPUT_SCAN_FLAGS = 0
+do
+    local ok, flag = pcall(function() return C.NO_RECAP end)
+    if ok and flag then INPUT_SCAN_FLAGS = flag end
+end
+
 -- Stub functions used to flip Device.has* properties on/off.
 local function yes() return true end
 local function no()  return false end
@@ -268,7 +276,8 @@ end
 function HIDPassthrough:_checkKeyboard(path)
     if not FBInkInput then return nil end
     local ok, result = pcall(function()
-        local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEYBOARD, 0, 0)
+        local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEYBOARD, 0,
+            INPUT_SCAN_FLAGS)
         if dev == nil then return nil end
         local r
         if dev.matched then
