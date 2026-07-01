@@ -68,13 +68,6 @@ listDevices()
   cat devices.conf
 }
 
-setLayout()
-{
-  printf "Enter layout code (e.g. fr, de, 'fr(oss)'): "
-  read layout
-  /bin/sh setlayout.sh "$layout"
-}
-
 installWAFApp()
 {
   echo " -> Installing BTManager app"
@@ -165,10 +158,9 @@ print_menu()
   printf " 4) Install udev rules (keyboard service)\n"
   printf " 5) Install upstart (auto-start on boot)\n"
   printf " 6) Install BTManager app\n"
-  printf " 7) Set custom keyboard layout\n"
-  printf " 8) Install KOReader plugin\n"
-  printf " 9) Uninstall everything\n"
-  printf "10) Quit\n"
+  printf " 7) Install KOReader plugin\n"
+  printf " 8) Uninstall everything\n"
+  printf " 9) Quit\n"
 }
 
 # Non-interactive entry point: `sh install.sh <action>` runs one action and exits.
@@ -187,7 +179,7 @@ fi
 
 while :; do
   print_menu
-  printf "Enter choice [1-10]: "
+  printf "Enter choice [1-9]: "
   read choice
   case "$choice" in
     1)
@@ -209,15 +201,12 @@ while :; do
       installWAFApp
       ;;
     7)
-      setLayout
-      ;;
-    8)
       installKOReaderPlugin
       ;;
-    9)
+    8)
       uninstallAll
       ;;
-    10)
+    9)
       echo "Exiting."
       break
       ;;
