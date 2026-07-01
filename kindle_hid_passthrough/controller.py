@@ -11,6 +11,7 @@ import logging
 import os
 import threading
 
+from bt_setup import chip
 from config import Protocol, config, normalize_addr
 from device_cache import DeviceCache
 
@@ -121,6 +122,10 @@ class DaemonController:
                 await self.daemon.suspend()
                 config.validate_keystore()
 
+                # Re-warm the chip if a prior /stop powered it off; opening the
+                # transport against a cold chip makes HCI Reset time out.
+                chip().ensure_powered()
+
                 await self.daemon.scan(
                     duration=10.0,
                     on_device_found=self._on_device_found,
@@ -153,6 +158,10 @@ class DaemonController:
             try:
                 await self.daemon.suspend()
                 config.validate_keystore()
+
+                # Re-warm the chip if a prior /stop powered it off; opening the
+                # transport against a cold chip makes HCI Reset time out.
+                chip().ensure_powered()
 
                 success = await self.daemon.pair(address, protocol, name)
                 if success:
@@ -235,6 +244,7 @@ class DaemonController:
             try:
                 if suspend:
                     await self.daemon.suspend()
+                    chip().power_off()
                 else:
                     await self.daemon.disconnect()
             except Exception as e:

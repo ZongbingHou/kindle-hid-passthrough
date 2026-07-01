@@ -74,6 +74,10 @@ async def create_bumble_device(transport_spec=None, configure=None):
         log.error(f"Transport open timed out after {config.transport_timeout}s")
         raise
 
+    # chip hook: runs after the transport opens, before the first HCI command
+    from bt_setup import chip
+    chip().on_transport_open()
+
     try:
         device = Device.with_hci(
             config.device_name,

@@ -14,7 +14,7 @@ from kindle_detect import detect_kindle
 if TYPE_CHECKING:
     pass
 
-__version__ = "3.6.0"
+__version__ = "3.7.0"
 __build_sha__ = None  # stamped by build scripts
 
 
@@ -137,7 +137,12 @@ class Config:
         self._kindle_defaults = defaults
 
         if defaults:
-            transport = f'file:{defaults.device_path}'
+            if defaults.transport_scheme == 'serial':
+                transport = f'serial:{defaults.device_path},{defaults.baud_rate}'
+                if defaults.flow_control:
+                    transport += f',{defaults.flow_control}'
+            else:
+                transport = f'file:{defaults.device_path}'
             if os.path.exists(defaults.device_path):
                 logging.getLogger(__name__).info(
                     "Auto-detected transport: %s (%s)", transport, defaults.model_name)
@@ -148,7 +153,7 @@ class Config:
             return transport
 
         # Probe common device paths as a fallback
-        for path in ['/dev/stpbt', '/dev/ttyHS0', '/dev/ttyS1']:
+        for path in ['/dev/stpbt', '/dev/ttymxc2', '/dev/ttyHS0', '/dev/ttyS1']:
             if os.path.exists(path):
                 transport = f'file:{path}'
                 logging.getLogger(__name__).info(

@@ -22,6 +22,7 @@ sys.path.insert(0, '/mnt/us/kindle_hid_passthrough')
 
 from config import Protocol, config, get_version
 from daemon import main as daemon_main
+from bt_setup import prepare_bt
 from host import HIDHost
 from logging_utils import log
 from scanner import Scanner
@@ -43,6 +44,7 @@ async def pair_mode(protocol_filter: Protocol = None, sequential: bool = False):
     scanner = Scanner()
 
     try:
+        prepare_bt()
         await scanner.start()
 
         selected = None
@@ -53,16 +55,22 @@ async def pair_mode(protocol_filter: Protocol = None, sequential: bool = False):
             while not devices:
                 stop_event = asyncio.Event()
                 loop = asyncio.get_event_loop()
-                loop.add_reader(sys.stdin.fileno(), stop_event.set)
+                stdin_watched = False
+                try:
+                    loop.add_reader(sys.stdin.fileno(), stop_event.set)
+                    stdin_watched = True
+                except (OSError, ValueError):
+                    pass  # stdin not pollable (headless/service): just scan
                 try:
                     all_devices = await scanner.scan(
                         duration=10.0, concurrent=not sequential,
                         stop_event=stop_event
                     )
                 finally:
-                    loop.remove_reader(sys.stdin.fileno())
-                    if stop_event.is_set():
-                        sys.stdin.readline()  # consume the Enter
+                    if stdin_watched:
+                        loop.remove_reader(sys.stdin.fileno())
+                        if stop_event.is_set():
+                            sys.stdin.readline()  # consume the Enter
                 if protocol_filter:
                     devices = [d for d in all_devices if d.protocol == protocol_filter]
                 else:
