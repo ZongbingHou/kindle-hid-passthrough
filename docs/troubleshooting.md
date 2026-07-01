@@ -86,17 +86,6 @@ mntroot ro
 sh /mnt/us/kindle_hid_passthrough/illusion/install-waf-app.sh
 ```
 
-### Keyboard layout
-
-```bash
-/mnt/us/kindle_hid_passthrough/scripts/setlayout.sh <layout>
-
-# Available layouts
-ls /usr/share/X11/xkb/symbols
-```
-
-Where `<layout>` can be the country code (`fr`, `de`, `cz` etc.) or country+variant (`'fr(oss)'`, `'fr(bepo)'`).
-
 ## Common Issues
 
 ### Keypresses captured but no text input

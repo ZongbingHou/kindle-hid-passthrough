@@ -117,16 +117,6 @@ Paired devices are stored in `devices.conf`:
 
 **Mixed Protocol Support**: You can configure both BLE and Classic devices. The daemon automatically detects mixed protocols and uses a unified host that handles both simultaneously - the first device to connect wins.
 
-### Changing keyboard layout
-
-```bash
-/mnt/us/kindle_hid_passthrough/scripts/setlayout.sh <layout>
-```
-
-Where `<layout>` can be the country code (`fr`, `de`, `cz` etc.) or country+variant (`'fr(oss)'`, `'fr(bepo)'`).
-
-Available layouts: `ls /usr/share/X11/xkb/symbols`
-
 ## Mapping Inputs to Specific Actions
 
 On **Kindle**, the reading application ignores standard input devices, so you need a separate input mapper to trigger actions like page turns. Recommended: [kindle-button-mapper-rs](https://github.com/zampierilucas/kindle-button-mapper-rs) - A lightweight daemon that maps HID inputs to Kindle actions.
