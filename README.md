@@ -182,4 +182,4 @@ See [CLAUDE.md](CLAUDE.md) for development setup and commands.
 
 ## License
 
-GPL-3.0-or-later — see [LICENSE](LICENSE). Contributions made while the project was MIT-licensed remain covered by [LICENSE.MIT](LICENSE.MIT).
+GPL-3.0-or-later, see [LICENSE](LICENSE).
