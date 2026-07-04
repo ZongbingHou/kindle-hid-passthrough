@@ -79,7 +79,7 @@ def _log_missing_kmod(codename, expected=None):
     log.error("  ^ open an issue with these lines so we can compile the module")
 
 
-def _ensure_uhid():
+def ensure_uhid():
     """Load bundled uhid.ko on Kindles whose stock kernel lacks CONFIG_UHID."""
     if os.path.exists('/dev/uhid'):
         return True
@@ -105,6 +105,6 @@ def _ensure_uhid():
 
 def prepare_bt():
     """Load uhid if needed, then prepare the chip. True if BT is ready."""
-    _ensure_uhid()
+    ensure_uhid()
     log.info("Preparing Bluetooth hardware...")
     return chip().prepare()
