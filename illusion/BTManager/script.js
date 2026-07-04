@@ -180,6 +180,9 @@ var BTManager = (function() {
 
             renderDeviceLists(data.devices, data.connected_device || null);
 
+            getEl("hidWarning").style.display =
+                (data.connected_device && data.hid_ready === false) ? "block" : "none";
+
             if (data.version) {
                 getEl("footerVersion").innerHTML = "v" + escapeHtml(data.version);
             }
@@ -265,12 +268,19 @@ var BTManager = (function() {
 
         // HID info
         var hidSection = getEl("detailHid");
+        var hidWarn = getEl("detailHidWarning");
         hidSection.style.display = "none";
+        hidWarn.style.display = "none";
 
         if (isConnected && lastStatus) {
             var uhid = lastStatus.uhid_name;
             var inputs = lastStatus.input_paths;
-            if (uhid || inputs) {
+            if (lastStatus.hid_ready === false) {
+                hidWarn.style.display = "block";
+                getEl("detailUhid").innerHTML = "--";
+                getEl("detailInputPaths").innerHTML = "--";
+                hidSection.style.display = "block";
+            } else if (uhid || inputs) {
                 getEl("detailUhid").innerHTML = escapeHtml(uhid || "--");
                 getEl("detailInputPaths").innerHTML = inputs && inputs.length ? escapeHtml(inputs.join(", ")) : "--";
                 hidSection.style.display = "block";

@@ -9,6 +9,7 @@ from bumble.core import InvalidStateError
 from bumble.hci import HCI_LE_SET_PRIVACY_MODE_COMMAND, HCI_LE_Set_Privacy_Mode_Command, HCI_Write_Class_Of_Device_Command, HCI_Write_Local_Name_Command
 
 from ble import BLEMixin
+from bt_setup import ensure_uhid
 from classic import ClassicMixin
 from config import Protocol, config, get_version, normalize_addr
 from device_cache import DeviceCache
@@ -86,6 +87,7 @@ class HIDHost(ClassicMixin, BLEMixin):
             "address": normalize_addr(self.current_device_address) if self.current_device_address else None,
             "protocol": self.connected_protocol.value if self.connected_protocol else None,
             "name": self.device_name,
+            "hid_ready": self.uhid_device is not None,
         }
         if self.uhid_device:
             state["uhid_name"] = self.uhid_device.name
@@ -358,6 +360,10 @@ class HIDHost(ClassicMixin, BLEMixin):
         """Create UHID virtual device."""
         if not self.report_map:
             log.warning("No report descriptor for UHID")
+            return
+
+        if not ensure_uhid():
+            log.error("uhid unavailable; connected device will have no input path")
             return
 
         try:
