@@ -29,6 +29,9 @@
         <div id="connectedSection" style="display:none;">
             <div class="section-label">Connected</div>
             <div id="connectedList" class="device-list"></div>
+            <div id="hidWarning" class="hid-warning" style="display:none;">
+                No input device. Page turns won't work. Try restarting the daemon.
+            </div>
         </div>
 
         <!-- Paired devices section -->
@@ -84,6 +87,9 @@
             </div>
             <div id="detailHid" style="display:none;">
                 <div class="section-label">HID</div>
+                <div id="detailHidWarning" class="hid-warning" style="display:none;">
+                    No input device created. Page turns won't work.
+                </div>
                 <div class="detail-row">
                     <span class="detail-label">UHID Device</span>
                     <span id="detailUhid" class="detail-value"></span>
