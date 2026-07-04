@@ -38,6 +38,13 @@ backported source and its build harness live in
   as modules with `BT_HIDP`/`USB_HID` disabled so nothing `select`s `HID=y`.
   `hid.ko` also pulls in `debugfs_*`, which the device exports
   (`CONFIG_DEBUG_FS=y` in the defconfig).
+- **Generic driver.** Pre-3.9 kernels have no transport-independent generic HID
+  driver (usbhid/hidp each register their own `generic-*`, and `hid_match_one_id`
+  requires an exact bus match). With those disabled, nothing binds a
+  uhid-created device, so uhid.ko registers its own `generic-uhid` driver
+  (matching `BUS_BLUETOOTH`/`USB`/`VIRTUAL`); without it the device is added to
+  the hid bus but never probed, so `hidinput_connect()` never runs and no
+  `/dev/input/eventX` appears.
 - **No MODVERSIONS.** `# CONFIG_MODVERSIONS is not set`, so there is no
   `module_layout` CRC to match; the `vmlinux` pass is unnecessary
   (`make modules_prepare` is enough). Only the vermagic string must match:

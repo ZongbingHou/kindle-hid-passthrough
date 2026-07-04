@@ -158,6 +158,22 @@ static struct hid_ll_driver uhid_hid_driver = {
 	.parse = uhid_hid_parse,
 };
 
+/* 3.0.35 has no transport-independent generic HID driver (usbhid/hidp each
+ * register their own), so register one here to bind uhid-created devices and
+ * run hidinput_connect. hid_match_one_id needs an exact bus, so list each. */
+static const struct hid_device_id uhid_hid_table[] = {
+	{ HID_BLUETOOTH_DEVICE(HID_ANY_ID, HID_ANY_ID) },
+	{ HID_USB_DEVICE(HID_ANY_ID, HID_ANY_ID) },
+	{ HID_DEVICE(BUS_VIRTUAL, HID_ANY_ID, HID_ANY_ID) },
+	{ }
+};
+MODULE_DEVICE_TABLE(hid, uhid_hid_table);
+
+static struct hid_driver uhid_hid_generic = {
+	.name = "generic-uhid",
+	.id_table = uhid_hid_table,
+};
+
 static int uhid_event_from_user(const char __user *buffer, size_t len,
 				struct uhid_event *event)
 {
@@ -454,11 +470,22 @@ static struct miscdevice uhid_misc = {
 
 static int __init uhid_init(void)
 {
-	return misc_register(&uhid_misc);
+	int ret;
+
+	ret = misc_register(&uhid_misc);
+	if (ret)
+		return ret;
+
+	ret = hid_register_driver(&uhid_hid_generic);
+	if (ret)
+		misc_deregister(&uhid_misc);
+
+	return ret;
 }
 
 static void __exit uhid_exit(void)
 {
+	hid_unregister_driver(&uhid_hid_generic);
 	misc_deregister(&uhid_misc);
 }
 
