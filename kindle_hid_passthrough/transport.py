@@ -99,6 +99,7 @@ async def create_bumble_device(transport_spec=None, configure=None):
             await asyncio.sleep(0.2)
         except asyncio.TimeoutError:
             log.error("HCI Reset timed out")
+            chip().on_hci_reset_timeout()
             raise
 
         device.address_resolution_offload = (

@@ -12,7 +12,12 @@ except ImportError:
     def bumble_color(text, _color):
         return text
 
-__all__ = ['log', 'color', 'setup_logging', 'setup_daemon_logging']
+__all__ = ['log', 'color', 'errstr', 'setup_logging', 'setup_daemon_logging']
+
+
+def errstr(e: BaseException) -> str:
+    """str(exc), falling back to the class name for empty messages."""
+    return str(e) or type(e).__name__
 
 
 def color(text: str, color_name: str) -> str:
