@@ -22,6 +22,7 @@ BTENABLE_LIPC = ['lipc-set-prop', 'com.lab126.btfd', 'BTenable', '1:1']
 BSA_WARMUP_TIMEOUT = 12.0   # seconds to wait for bsa_server after BTenable
 BSA_FIRMWARE_SETTLE = 2.0   # let bsa finish the .hcd download before we take over
 BSA_WARMUP_RETRIES = 3      # btd-recovery attempts before giving up on warm-up
+BSA_MIN_AGE = 5.0           # bsa_server younger than this may be mid .hcd download
 POST_WAKE_SETTLE = 0.5      # let the chip settle after wake before first HCI cmd
 
 
@@ -33,6 +34,19 @@ def _pgrep_x(name):
         return [int(p) for p in r.stdout.split() if p.isdigit()]
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         return []
+
+
+def _pid_age(pid):
+    """Seconds since `pid` started, or None if unreadable."""
+    try:
+        with open(f'/proc/{pid}/stat') as f:
+            starttime = int(f.read().rsplit(')', 1)[1].split()[19])
+        with open('/proc/uptime') as f:
+            uptime = float(f.read().split()[0])
+        age = uptime - starttime / os.sysconf('SC_CLK_TCK')
+        return age if age >= 0 else None
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def _wait_for_bsa():
@@ -65,7 +79,13 @@ def _recover_btd():
 
 def _warm_up_chip():
     """Bring the chip up via Amazon's BT stack (it loads the firmware)."""
-    if _pgrep_x('bsa_server'):
+    pids = _pgrep_x('bsa_server')
+    if pids:
+        # killing bsa mid .hcd download leaves the chip half-programmed
+        age = _pid_age(pids[0])
+        if age is not None and age < BSA_MIN_AGE:
+            log.info(f"bsa_server only {age:.1f}s old; waiting for firmware download")
+            time.sleep(BSA_MIN_AGE - age)
         log.info("bsa_server already running; BCM chip is warm")
         return True
 
@@ -109,6 +129,8 @@ def _handoff_from_bsa(device_path):
 
 
 class BrcmChip(BtChip):
+    survives_suspend = False
+
     def __init__(self, kindle):
         super().__init__(kindle)
         # Serialize prepare/power_off/ensure_powered so suspend and resume can't
@@ -163,10 +185,18 @@ class BrcmChip(BtChip):
                 return
             run(['initctl', 'restart', 'btd'])   # resets btfd BTstate -> clears the icon
 
+    def on_hci_reset_timeout(self):
+        log.warning("HCI Reset timed out on BCM; powering off for a clean re-warm")
+        self.power_off()
+
     def ensure_powered(self):
         with self._power_lock:
             # btenable can read back 1 after btd respawns without a handoff, so
             # trust our own _warm flag to decide whether a re-warm is needed.
-            if self._warm and not _pgrep_x('bsa_server'):
-                return
+            if self._warm:
+                if not _pgrep_x('bsa_server'):
+                    return
+                # bsa respawned behind our handoff: chip state unknown
+                log.warning("bsa_server respawned after handoff; power-cycling chip")
+                self.power_off()
             self.prepare()

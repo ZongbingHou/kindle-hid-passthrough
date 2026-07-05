@@ -9,13 +9,14 @@ import threading
 
 sys.path.insert(0, '/mnt/us/kindle_hid_passthrough')
 
-from api_server import APIServer, RequestHandler, PORT
+from api_server import PORT, APIServer, RequestHandler
 from bt_setup import chip, prepare_bt
 from config import config, get_version
 from controller import DaemonController
 from host import HIDHost
+from logging_utils import errstr, log, setup_daemon_logging
+from power_monitor import PowerMonitor
 from scanner import Scanner
-from logging_utils import log, setup_daemon_logging
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,7 @@ class HIDDaemon:
                 logger.info("No devices configured, waiting for pairing...")
                 self._resume_event.clear()
                 await self._resume_event.wait()
+                self._resume_event.clear()  # else the next reconnect delay is skipped
                 if not self.running:
                     break
                 continue
@@ -175,7 +177,7 @@ class HIDDaemon:
                     logger.info("Connection cancelled, will reconnect")
 
             except Exception as e:
-                logger.error(f"Error: {e}")
+                logger.error(f"Error: {errstr(e)}")
 
             finally:
                 self._host_task = None
@@ -253,6 +255,12 @@ async def main():
     server_thread.start()
     log.info(f"API server listening on port {PORT}")
 
+    monitor = None
+    if not chip().survives_suspend:
+        monitor = PowerMonitor(controller)
+        monitor.start()
+        log.info("Watching powerd for system suspend")
+
     # Signal handling
     shutdown = asyncio.Event()
 
@@ -281,6 +289,8 @@ async def main():
             except asyncio.CancelledError:
                 pass
 
+    if monitor:
+        monitor.stop()
     server.shutdown()
     logger.info("Daemon stopped")
 

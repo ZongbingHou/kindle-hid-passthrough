@@ -35,6 +35,9 @@ class BtChip:
     Defaults are no-ops; subclasses override only the hooks they need.
     """
 
+    # False -> daemon powers BT off before system sleep, re-warms after wake
+    survives_suspend = True
+
     def __init__(self, kindle):
         self.kindle = kindle
 
@@ -44,6 +47,9 @@ class BtChip:
 
     def on_transport_open(self):
         """Run right after the transport opens, before the first HCI command."""
+
+    def on_hci_reset_timeout(self):
+        """Run after HCI Reset times out, before the connect attempt is retried."""
 
     def power_off(self):
         """Turn the radio off (BT-off toggle)."""

@@ -14,6 +14,7 @@ import threading
 from bt_setup import chip
 from config import Protocol, config, normalize_addr
 from device_cache import DeviceCache
+from logging_utils import errstr
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class DaemonController:
         self.loop = None  # Set when event loop starts
 
         self._op_lock = asyncio.Lock()
+        self._suspended_by_system = False
 
         # Scan state
         self.scan_result = None
@@ -136,7 +138,7 @@ class DaemonController:
                     "devices": self._scan_live_devices,
                 }
             except Exception as e:
-                logger.error(f"Scan failed: {e}")
+                logger.error(f"Scan failed: {errstr(e)}")
                 self.scan_result = {"ok": False, "error": str(e)}
             finally:
                 self.is_scanning = False
@@ -174,7 +176,7 @@ class DaemonController:
                        else {"error": "Pairing failed"}),
                 }
             except Exception as e:
-                logger.error(f"Pair failed: {e}")
+                logger.error(f"Pair failed: {errstr(e)}")
                 self.pair_result = {"ok": False, "address": address, "error": str(e)}
             finally:
                 self.is_pairing = False
@@ -199,6 +201,7 @@ class DaemonController:
 
     async def _do_resume(self):
         async with self._op_lock:
+            self._suspended_by_system = False
             if self.daemon._suspended:
                 await self.daemon.resume()
 
@@ -209,8 +212,37 @@ class DaemonController:
                 config.add_device(address, protocol)
                 await self.daemon.resume()
             except Exception as e:
-                logger.error(f"Connect failed: {e}")
+                logger.error(f"Connect failed: {errstr(e)}")
                 await self.daemon.resume()
+
+    # ---- System suspend (powerd) ----
+
+    def on_system_suspend(self, event):
+        """From power monitor thread: BT off before the system sleeps."""
+        asyncio.run_coroutine_threadsafe(self._do_system_suspend(event), self.loop)
+
+    async def _do_system_suspend(self, event):
+        async with self._op_lock:
+            if self.daemon._suspended:
+                return
+            logger.info(f"System suspend ({event}): powering BT off")
+            self._suspended_by_system = True
+            await self.daemon.suspend()
+            chip().power_off()
+
+    def on_system_resume(self, event):
+        """From power monitor thread: re-warm BT after wake."""
+        asyncio.run_coroutine_threadsafe(self._do_system_resume(event), self.loop)
+
+    async def _do_system_resume(self, event):
+        async with self._op_lock:
+            if not self._suspended_by_system:
+                return
+            self._suspended_by_system = False
+            if not self.daemon._suspended:
+                return
+            logger.info(f"System resume ({event}): restarting BT")
+            await self.daemon.resume()
 
     # ---- Remove ----
 
@@ -249,4 +281,4 @@ class DaemonController:
                 else:
                     await self.daemon.disconnect()
             except Exception as e:
-                logger.error(f"Disconnect failed: {e}")
+                logger.error(f"Disconnect failed: {errstr(e)}")
