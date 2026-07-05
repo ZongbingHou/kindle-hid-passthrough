@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import asyncio
+import os
 import sys
 
 # Add current directory to path for imports
@@ -144,7 +145,23 @@ async def run_mode(address: str):
         await host.cleanup()
 
 
+def _close_inherited_sockets():
+    """Close socket fds inherited from the spawning process, e.g. KOReader's
+    HTTP Inspector listener when spawned from the koplugin (#86)."""
+    for entry in os.listdir('/proc/self/fd'):
+        fd = int(entry)
+        if fd <= 2:
+            continue
+        try:
+            if os.readlink(f'/proc/self/fd/{entry}').startswith('socket:'):
+                os.close(fd)
+        except OSError:
+            pass
+
+
 def main():
+    _close_inherited_sockets()
+
     parser = argparse.ArgumentParser(
         description='Kindle HID Passthrough - Userspace Bluetooth HID host'
     )

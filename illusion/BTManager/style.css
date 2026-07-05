@@ -421,6 +421,17 @@ html {
     border-top-style: dashed;
 }
 
+.hid-warning {
+    margin: 8px 0 4px;
+    padding: 12px 16px;
+    border: 3px dashed #000;
+    background: #fff;
+    color: #000;
+    font-size: 30px;
+    font-weight: bold;
+    text-align: center;
+}
+
 /* ---- Confirm dialog overlay ---- */
 
 .overlay {
@@ -628,6 +639,7 @@ html {
     .footer { font-size: 15px; padding: 7px 12px 5px 12px; }
     .device-empty { font-size: 20px; }
     .message-bar { font-size: 20px; padding: 9px 12px; }
+    .hid-warning { font-size: 18px; padding: 8px 10px; }
     .dialog { padding: 18px; }
     .dialog p { font-size: 22px; }
     .dialog .dialog-addr, .pair-dialog .pair-addr { font-size: 20px; }

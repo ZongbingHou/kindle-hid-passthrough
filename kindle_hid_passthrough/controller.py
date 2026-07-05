@@ -66,6 +66,7 @@ class DaemonController:
             status["connected_device"] = conn.get("address")
             status["connected_protocol"] = conn.get("protocol")
             status["connected_name"] = conn.get("name")
+            status["hid_ready"] = conn.get("hid_ready", False)
             if conn.get("uhid_name"):
                 status["uhid_name"] = conn["uhid_name"]
             if conn.get("input_paths"):

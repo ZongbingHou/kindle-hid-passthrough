@@ -30,6 +30,7 @@ state = {
     "connected_device": None,
     "connected_protocol": None,
     "connected_name": None,
+    "hid_ready": True,
     "version": "3.0.0",
     "scan_results": [
         {"address": "AA:BB:CC:DD:EE:01", "name": "BT Keyboard", "protocol": "classic", "rssi": -45},
@@ -66,6 +67,7 @@ class MockHandler(SimpleHTTPRequestHandler):
                 resp["connected_device"] = state["connected_device"]
                 resp["connected_protocol"] = state["connected_protocol"]
                 resp["connected_name"] = state["connected_name"]
+                resp["hid_ready"] = state["hid_ready"]
             self._json(resp)
 
         elif self.path == "/scan":
