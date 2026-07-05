@@ -3,6 +3,7 @@
 
 import os
 import re
+import stat
 
 from bt_brcm import BrcmChip
 from bt_chip import run
@@ -79,6 +80,38 @@ def _log_missing_kmod(codename, expected=None):
     log.error("  ^ open an issue with these lines so we can compile the module")
 
 
+def _create_dev_node(sysfs_dev, dev_path):
+    """Create a char device node from a sysfs 'major:minor' dev attribute.
+
+    Needed on kernels without devtmpfs (e.g. Oasis 1 / duet), where
+    misc_register does not auto-create /dev/uhid.
+    """
+    try:
+        with open(sysfs_dev) as f:
+            major, minor = (int(x) for x in f.read().strip().split(':'))
+        os.mknod(dev_path, stat.S_IFCHR | 0o600, os.makedev(major, minor))
+        return True
+    except (OSError, ValueError) as e:
+        log.error(f"could not create {dev_path}: {e}")
+        return False
+
+
+def _ensure_hid_core(kernel, build, codename):
+    """uhid needs the HID core; the Oasis 1 kernel ships without it.
+
+    When the hid bus isn't registered, load a bundled hid.ko (hid-core +
+    hid-input) so uhid's hid_* symbols resolve. No-op on kernels that
+    already have HID built in.
+    """
+    if os.path.exists('/sys/bus/hid'):
+        return
+    ko = _find_bundled_ko(f"hid-{kernel}-{build}-{codename}.ko")
+    if ko is None:
+        return
+    log.info(f"loading {os.path.basename(ko)} (HID core)")
+    run(['/sbin/insmod', ko])
+
+
 def ensure_uhid():
     """Load bundled uhid.ko on Kindles whose stock kernel lacks CONFIG_UHID."""
     if os.path.exists('/dev/uhid'):
@@ -96,10 +129,15 @@ def ensure_uhid():
     if ko is None:
         _log_missing_kmod(codename, expected)
         return False
+    _ensure_hid_core(kernel, build, codename)
     log.info(f"loading {expected}")
     if not run(['/sbin/insmod', ko]):
         log.error("insmod failed")
         return False
+    # devtmpfs kernels create /dev/uhid automatically; older ones (duet)
+    # need the node created by hand from the misc device's sysfs entry.
+    if not os.path.exists('/dev/uhid'):
+        _create_dev_node('/sys/class/misc/uhid/dev', '/dev/uhid')
     return os.path.exists('/dev/uhid')
 
 

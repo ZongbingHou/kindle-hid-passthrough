@@ -11,17 +11,24 @@ __all__ = ['UHIDDevice', 'UHIDError', 'Bus', 'strip_digitizer_collections']
 logger = logging.getLogger(__name__)
 
 def strip_digitizer_collections(descriptor: bytes) -> bytes:
-    """Strip Digitizer (0x0D) top-level collections from a HID descriptor.
+    """Drop any top-level collection that contains a Digitizer (0x0D) usage.
 
-    The Kindle kernel lacks CONFIG_HID_MULTITOUCH, so hid-core silently
-    drops the entire UHID device when the descriptor contains Digitizer
-    collections. Removing them lets hid-generic claim the rest.
+    Two reasons a Digitizer must never reach the Kindle:
+      * The kernel lacks CONFIG_HID_MULTITOUCH, so hid-core silently drops the
+        whole UHID device when a Digitizer collection is present.
+      * Digitizer Tip Pressure surfaces as EV_ABS:ABS_PRESSURE, which KOReader's
+        Kindle gyro decoders read as a screen-rotation event and use to flip the
+        reader into the opposite landscape (issue #83).
+
+    A Digitizer usage page anywhere inside a top-level collection taints the
+    whole collection, so a digitizer nested in a keyboard/pointer combo is
+    caught too, not only a digitizer declared at the collection's top.
     """
     kept = []
     i = 0
-    usage_page = 0
     seg_start = 0
     depth = 0
+    seg_has_digitizer = False
 
     while i < len(descriptor):
         b = descriptor[i]
@@ -43,21 +50,23 @@ def strip_digitizer_collections(descriptor: bytes) -> bytes:
         else:
             val = 0
 
-        if item_type == 1 and tag == 0 and depth == 0:
-            usage_page = val
+        # Global Usage Page item, at any depth: 0x0D taints the segment.
+        if item_type == 1 and tag == 0 and val == 0x0D:
+            seg_has_digitizer = True
         if item_type == 0 and tag == 10:
             depth += 1
         if item_type == 0 and tag == 12:
             depth -= 1
             if depth == 0:
                 end = i + 1 + size
-                if usage_page != 0x0D:
+                if not seg_has_digitizer:
                     kept.append(descriptor[seg_start:end])
                 seg_start = end
+                seg_has_digitizer = False
 
         i += 1 + size
 
-    if not kept or len(kept) == len(descriptor):
+    if not kept:
         return descriptor
 
     result = b''.join(kept)
