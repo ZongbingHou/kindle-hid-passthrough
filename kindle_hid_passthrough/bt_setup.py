@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bluetooth hardware setup — select and drive the per-Kindle chip backend."""
 
+import glob
 import os
 import re
 import stat
@@ -26,12 +27,13 @@ def _module_search_dirs():
     return [d for d in dirs if not (d in seen or seen.add(d))]
 
 
-def _find_bundled_ko(name):
+def _find_bundled_kos(pattern, exact_first):
+    """Bundled modules matching a glob, deduped by basename, exact build first."""
+    found = {}
     for d in _module_search_dirs():
-        ko = os.path.join(d, name)
-        if os.path.exists(ko):
-            return ko
-    return None
+        for ko in glob.glob(os.path.join(d, pattern)):
+            found.setdefault(os.path.basename(ko), ko)
+    return sorted(found.values(), key=lambda p: os.path.basename(p) != exact_first)
 
 _chip = None
 
@@ -105,11 +107,11 @@ def _ensure_hid_core(kernel, build, codename):
     """
     if os.path.exists('/sys/bus/hid'):
         return
-    ko = _find_bundled_ko(f"hid-{kernel}-{build}-{codename}.ko")
-    if ko is None:
-        return
-    log.info(f"loading {os.path.basename(ko)} (HID core)")
-    run(['/sbin/insmod', ko])
+    exact = f"hid-{kernel}-{build}-{codename}.ko"
+    for ko in _find_bundled_kos(f"hid-{kernel}-*-{codename}.ko", exact_first=exact):
+        log.info(f"loading {os.path.basename(ko)} (HID core)")
+        if run(['/sbin/insmod', ko]) and os.path.exists('/sys/bus/hid'):
+            return
 
 
 def ensure_uhid():
@@ -125,20 +127,22 @@ def ensure_uhid():
         return False
     kernel = os.uname().release
     expected = f"uhid-{kernel}-{build}-{codename}.ko"
-    ko = _find_bundled_ko(expected)
-    if ko is None:
+    candidates = _find_bundled_kos(f"uhid-{kernel}-*-{codename}.ko", exact_first=expected)
+    if not candidates:
         _log_missing_kmod(codename, expected)
         return False
     _ensure_hid_core(kernel, build, codename)
-    log.info(f"loading {expected}")
-    if not run(['/sbin/insmod', ko]):
-        log.error("insmod failed")
-        return False
-    # devtmpfs kernels create /dev/uhid automatically; older ones (duet)
-    # need the node created by hand from the misc device's sysfs entry.
-    if not os.path.exists('/dev/uhid'):
-        _create_dev_node('/sys/class/misc/uhid/dev', '/dev/uhid')
-    return os.path.exists('/dev/uhid')
+    for ko in candidates:
+        log.info(f"loading {os.path.basename(ko)}")
+        if not run(['/sbin/insmod', ko]):
+            continue
+        # duet lacks devtmpfs, so misc_register doesn't create /dev/uhid
+        if not os.path.exists('/dev/uhid'):
+            _create_dev_node('/sys/class/misc/uhid/dev', '/dev/uhid')
+        if os.path.exists('/dev/uhid'):
+            return True
+    _log_missing_kmod(codename, expected)
+    return False
 
 
 def prepare_bt():
