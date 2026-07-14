@@ -3,14 +3,14 @@
         xmlns="http://www.w3.org/ns/widgets"
         xmlns:kindle="http://kindle.amazon.com/ns/widget-extensions">
 
-    <name xml:lang="en">HID Passthrough</name>
+    <name xml:lang="en">BT Manager</name>
     <author>Lucas Zampieri</author>
     <description xml:lang="en">Bluetooth HID Passthrough</description>
 
     <content src="index.html" />
 
     <kindle:chrome>
-        <kindle:asset key="configureSearchBar" value="none" />
+        <kindle:asset key="configureSearchBar" value="system" />
     </kindle:chrome>
 
     <kindle:gestures>
