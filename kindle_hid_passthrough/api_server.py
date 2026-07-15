@@ -11,8 +11,6 @@ Port 8321 on localhost.
 import json
 import os
 import socket
-import subprocess
-import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
@@ -94,8 +92,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._handle_disconnect()
             case '/logs':
                 self._handle_logs(param('lines'))
-            case '/quit-app':
-                self._handle_quit_app()
             case _:
                 self._send_json({"ok": False, "error": "Not found"})
 
@@ -211,17 +207,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         controller = self._controller
         controller.request_disconnect()
         self._send_json({"ok": True, "message": "Disconnecting"})
-
-    def _handle_quit_app(self):
-        self._send_json({"ok": True})
-        threading.Thread(
-            target=lambda: subprocess.run(
-                ["lipc-set-prop", "com.lab126.appmgrd", "stop",
-                 "app://com.lzampier.btmanager"],
-                timeout=5,
-            ),
-            daemon=True,
-        ).start()
 
     def _handle_logs(self, lines_str):
         log_file = config.log_file
