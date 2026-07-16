@@ -140,6 +140,7 @@ class BrcmChip(BtChip):
 
     def prepare(self):
         with self._power_lock:
+            log.warning("BCM (Broadcom) BT support is experimental")
             self._warm = False
             device_path = self.kindle.device_path
             if not os.path.exists(device_path):
