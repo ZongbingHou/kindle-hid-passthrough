@@ -128,6 +128,10 @@ edit-devices:
 keys:
     @ssh {{host}} "cat {{remote_dir}}/cache/pairing_keys.json 2>/dev/null | python3 -m json.tool || echo 'No pairing keys'"
 
+# Print a read-only diagnostics dump for bug reports
+diagnostics:
+    @ssh {{host}} "{{python}} {{remote_dir}}/main.py --diagnostics"
+
 # SSH into Kindle
 ssh:
     ssh {{host}}
