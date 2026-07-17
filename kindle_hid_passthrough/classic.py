@@ -81,6 +81,14 @@ class ClassicMixin:
                     pass
                 return
 
+            if self.connection is not None and self.connection is not connection:
+                try:
+                    self.connection.remove_listener('disconnection', self._on_disconnection)
+                except Exception:
+                    pass
+
+            self._disconnection_event.clear()
+
             self.connection = connection
             self.current_device_address = addr_str
             self.connected_protocol = Protocol.CLASSIC
