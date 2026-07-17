@@ -215,12 +215,10 @@ end
 local function yes() return true end
 local function no()  return false end
 
--- Map of attached keyboard event paths -> { fd_object, original_caps_index }.
--- The fd_object is whatever Device.input:fdopen returns, which we hand back
--- to :close() on removal.
-HIDPassthrough._kb_attached = {}
-HIDPassthrough._kb_count = 0
-HIDPassthrough._kb_original_caps = nil
+-- Module-level so attachments survive FileManager <-> ReaderUI re-instantiation.
+local kb_attached = {}
+local kb_count = 0
+local kb_original_caps = nil
 
 -- Pull in the upstream keyboard event_map. Prefer the upstream copy (so we
 -- get any improvements automatically); fall back to our bundled copy if it
@@ -248,8 +246,8 @@ end
 -- Snapshot the device-wide input caps so we can restore them when the last
 -- keyboard goes away. Idempotent across multiple keyboard connects.
 function HIDPassthrough:_snapshotDeviceCaps()
-    if self._kb_original_caps then return end
-    self._kb_original_caps = {
+    if kb_original_caps then return end
+    kb_original_caps = {
         event_map       = Device.input.event_map,
         keyboard_layout = Device.keyboard_layout,
         hasKeyboard     = Device.hasKeyboard,
@@ -260,14 +258,14 @@ function HIDPassthrough:_snapshotDeviceCaps()
 end
 
 function HIDPassthrough:_restoreDeviceCaps()
-    if not self._kb_original_caps then return end
-    Device.input.event_map = self._kb_original_caps.event_map
-    Device.keyboard_layout = self._kb_original_caps.keyboard_layout
-    Device.hasKeyboard     = self._kb_original_caps.hasKeyboard
-    Device.hasKeys         = self._kb_original_caps.hasKeys
-    Device.hasFewKeys      = self._kb_original_caps.hasFewKeys
-    Device.hasDPad         = self._kb_original_caps.hasDPad
-    self._kb_original_caps = nil
+    if not kb_original_caps then return end
+    Device.input.event_map = kb_original_caps.event_map
+    Device.keyboard_layout = kb_original_caps.keyboard_layout
+    Device.hasKeyboard     = kb_original_caps.hasKeyboard
+    Device.hasKeys         = kb_original_caps.hasKeys
+    Device.hasFewKeys      = kb_original_caps.hasFewKeys
+    Device.hasDPad         = kb_original_caps.hasDPad
+    kb_original_caps = nil
 end
 
 -- Ask FBInkInput whether `path` is a keyboard. Returns a table with fd,
@@ -320,7 +318,7 @@ end
 -- Attach a keyboard given a checkKeyboard result. Idempotent: skips if the
 -- path is already attached.
 function HIDPassthrough:_attachKeyboard(info)
-    if self._kb_attached[info.path] then return end
+    if kb_attached[info.path] then return end
 
     local ok, fd = pcall(Device.input.fdopen, Device.input,
         info.fd, info.path, info.name)
@@ -346,12 +344,12 @@ function HIDPassthrough:_attachKeyboard(info)
         Device.hasDPad = yes
     end
 
-    self._kb_attached[info.path] = { fd = fd, has_dpad = info.has_dpad }
-    self._kb_count = self._kb_count + 1
+    kb_attached[info.path] = { fd = fd, has_dpad = info.has_dpad }
+    kb_count = kb_count + 1
     logger.info("HIDPassthrough: attached keyboard", info.name, "@", info.path,
-        "(total:", self._kb_count, ")")
+        "(total:", kb_count, ")")
 
-    if self._kb_count == 1 then
+    if kb_count == 1 then
         UIManager:show(InfoMessage:new{
             text = _("Keyboard connected"),
             timeout = 1,
@@ -368,7 +366,7 @@ end
 -- count, and if it was the last one, restores device caps and broadcasts
 -- the disconnect event.
 function HIDPassthrough:_detachKeyboard(path)
-    local entry = self._kb_attached[path]
+    local entry = kb_attached[path]
     if not entry then return end
 
     local ok, err = pcall(Device.input.close, Device.input, path)
@@ -376,12 +374,12 @@ function HIDPassthrough:_detachKeyboard(path)
         logger.warn("HIDPassthrough: close failed for", path, ":", err)
     end
 
-    self._kb_attached[path] = nil
-    self._kb_count = self._kb_count - 1
+    kb_attached[path] = nil
+    kb_count = kb_count - 1
     logger.info("HIDPassthrough: detached keyboard", path,
-        "(remaining:", self._kb_count, ")")
+        "(remaining:", kb_count, ")")
 
-    if self._kb_count == 0 then
+    if kb_count == 0 then
         self:_restoreDeviceCaps()
         UIManager:show(InfoMessage:new{
             text = _("Keyboard disconnected"),
@@ -411,7 +409,7 @@ function HIDPassthrough:_reconcileKeyboards()
     local seen = {}
     for _, path in ipairs(event_paths) do
         seen[path] = true
-        if not self._kb_attached[path] then
+        if not kb_attached[path] then
             local info = self:_checkKeyboard(path)
             if info then
                 self:_attachKeyboard(info)
@@ -421,7 +419,7 @@ function HIDPassthrough:_reconcileKeyboards()
 
     -- Detach anything we have that's no longer present.
     local gone = {}
-    for path in pairs(self._kb_attached) do
+    for path in pairs(kb_attached) do
         if not seen[path] then table.insert(gone, path) end
     end
     for _, path in ipairs(gone) do
@@ -450,14 +448,16 @@ end
 function HIDPassthrough:_stopKeyboardWatcher()
     if not self._kb_watcher_active then return end
     self._kb_watcher_active = false
-    -- Detach everything we have. Snapshot keys first because _detachKeyboard
-    -- mutates the table.
+    logger.info("HIDPassthrough: keyboard watcher stopped")
+end
+
+function HIDPassthrough:_detachAllKeyboards()
+    -- Snapshot keys first because _detachKeyboard mutates the table.
     local paths = {}
-    for path in pairs(self._kb_attached) do table.insert(paths, path) end
+    for path in pairs(kb_attached) do table.insert(paths, path) end
     for _, path in ipairs(paths) do
         self:_detachKeyboard(path)
     end
-    logger.info("HIDPassthrough: keyboard watcher stopped")
 end
 
 ------------------------------------------------------------------------------
@@ -566,9 +566,9 @@ function HIDPassthrough:stop()
     end
 
     -- Detach keyboards *before* asking the daemon to stop, so the input
-    -- read loop doesn't see fds vanish under it. _stopKeyboardWatcher
-    -- closes every keyboard fd we own and restores Device caps.
+    -- read loop doesn't see fds vanish under it.
     self:_stopKeyboardWatcher()
+    self:_detachAllKeyboards()
 
     -- Ask the API server to stop the HID daemon. The API server itself stays
     -- up, matching the BTManager behavior — that way the next /start is fast.
@@ -1153,28 +1153,33 @@ function HIDPassthrough:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
 
+    if kb_count > 0 then
+        self:_startKeyboardWatcher()
+        return
+    end
+
     -- The daemon may already be running from a previous session (upstart,
     -- kterm, or a leftover API server from an earlier KOReader run). If so,
     -- kick the watcher so any keyboard connected later gets picked up. We
     -- defer the HTTP probe to avoid blocking plugin init.
-    UIManager:scheduleIn(2, function()
+    self._init_probe_cb = function()
+        self._init_probe_cb = nil
         if self:isRunning() then
             logger.info("HIDPassthrough: daemon already running on init, "
                 .. "starting keyboard watcher")
             self:_startKeyboardWatcher()
         end
-    end)
+    end
+    UIManager:scheduleIn(2, self._init_probe_cb)
 end
 
--- Called when KOReader tears down. Leave the daemon running (the API server
--- is designed to outlive client UIs, and you may well want it up for the
--- next session), but cancel our scheduled tasks and detach our fds so we
--- don't leave KOReader polling vanishing devices on the way out.
+-- Fires on every FileManager <-> ReaderUI switch; keyboards stay attached.
 function HIDPassthrough:onCloseWidget()
-    if self._kb_watcher_active then
-        logger.info("HIDPassthrough: KOReader closing, stopping keyboard watcher")
-        self:_stopKeyboardWatcher()
+    if self._init_probe_cb then
+        UIManager:unschedule(self._init_probe_cb)
+        self._init_probe_cb = nil
     end
+    self:_stopKeyboardWatcher()
     self:_cancelPolls()
 end
 
