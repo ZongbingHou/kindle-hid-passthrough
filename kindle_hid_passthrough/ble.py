@@ -24,7 +24,7 @@ from bumble.hci import (
     OwnAddressType,
 )
 
-from config import Protocol, config, normalize_addr
+from config import Protocol, config, normalize_addr, clean_device_name
 from logging_utils import log
 
 HID_REPORT_TYPE_INPUT = 1
@@ -243,7 +243,7 @@ class BLEMixin:
             log.debug(f"[BLE] Ignoring malformed advertisement from {addr_norm}: {e}")
             return None
         if isinstance(name, bytes):
-            name = name.decode('utf-8', errors='replace')
+            name = clean_device_name(name)
         if name:
             dev = next((d for d in self.ble_devices if d.name == name), None)
             if dev:
@@ -374,7 +374,7 @@ class BLEMixin:
                     for char in service.characteristics:
                         if char.uuid == GATT_DEVICE_NAME_CHARACTERISTIC:
                             value = await self.peer.read_value(char)
-                            self.device_name = bytes(value).decode('utf-8', errors='replace')
+                            self.device_name = clean_device_name(bytes(value))
                             log.info(f"[BLE] Device name: {self.device_name}")
                             return
         except Exception as e:
