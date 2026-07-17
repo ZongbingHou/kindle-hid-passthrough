@@ -67,6 +67,10 @@ async def create_bumble_device(transport_spec=None, configure=None):
     if not spec:
         raise RuntimeError("No HCI transport available")
 
+    # chip hook: wake/verify the chip before we open and reset it
+    from bt_setup import chip
+    chip().pre_open()
+
     log.info("Opening transport...")
     try:
         transport = await _open_transport_with_recovery(spec)
@@ -75,7 +79,6 @@ async def create_bumble_device(transport_spec=None, configure=None):
         raise
 
     # chip hook: runs after the transport opens, before the first HCI command
-    from bt_setup import chip
     chip().on_transport_open()
 
     try:
