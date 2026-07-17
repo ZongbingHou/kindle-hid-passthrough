@@ -6,6 +6,17 @@ Userspace Bluetooth HID host for Kindle with UHID passthrough.
 
 The Kindle is accessed via SSH using the host alias `kindle`.
 
+## Keep Awake During Development
+
+Stop the Kindle from sleeping/screensaving while developing on it:
+
+```bash
+ssh kindle "lipc-set-prop -i com.lab126.powerd preventScreenSaver 1"   # keep awake
+ssh kindle "lipc-set-prop -i com.lab126.powerd preventScreenSaver 0"   # restore
+```
+
+Verify with `ssh kindle "lipc-get-prop com.lab126.powerd status"` (look for `prevent_screen_saver:1`).
+
 ## Deployment
 
 Use `just` commands for all deployment and management:

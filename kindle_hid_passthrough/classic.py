@@ -443,8 +443,11 @@ class ClassicMixin:
                             try:
                                 name = attr.value.value
                                 if isinstance(name, bytes):
-                                    name = name.decode('utf-8', errors='replace')
-                                self.device_name = str(name)
+                                    name = name.split(b'\x00')[0].decode(
+                                        'utf-8', errors='ignore')
+                                name = str(name).strip()
+                                if name:
+                                    self.device_name = name
                             except Exception:
                                 pass
 

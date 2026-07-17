@@ -175,8 +175,15 @@ def main():
                         help='Filter by protocol (pairing) or override (run)')
     parser.add_argument('--sequential', action='store_true',
                         help='Scan BLE and Classic sequentially')
+    parser.add_argument('--diagnostics', action='store_true',
+                        help='Print a read-only diagnostics dump for bug reports')
 
     args = parser.parse_args()
+
+    if args.diagnostics:
+        from diagnostics import run_diagnostics
+        run_diagnostics()
+        return
 
     log.info(f"Kindle HID Passthrough v{get_version()}")
     log.info(f"Config base path: {config.base_path}")
