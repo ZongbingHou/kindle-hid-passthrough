@@ -45,6 +45,9 @@ class BtChip:
         """Bring the BT device to a state where the transport can open."""
         return True
 
+    def pre_open(self):
+        """Run before the HCI transport opens, to wake/verify the chip."""
+
     def on_transport_open(self):
         """Run right after the transport opens, before the first HCI command."""
 
