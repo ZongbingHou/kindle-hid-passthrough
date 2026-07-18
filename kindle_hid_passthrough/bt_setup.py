@@ -69,9 +69,9 @@ def _read_firmware_build():
     return m.group(1) if m else None
 
 
-def _log_missing_kmod(codename, expected=None):
+def _log_missing_kmod(codename, expected=None, mod='uhid'):
     kindle = detect_kindle()
-    log.error("no bundled uhid.ko for this Kindle; we need to build one")
+    log.error(f"no bundled {mod}.ko for this Kindle; we need to build one")
     if expected:
         log.error(f"  module needed : {expected}")
     log.error(f"  model         : {kindle.model_name if kindle else 'unknown'}")
@@ -145,8 +145,38 @@ def ensure_uhid():
     return False
 
 
+def ensure_uinput():
+    """Load bundled uinput.ko on Kindles whose stock kernel lacks CONFIG_INPUT_UINPUT."""
+    if os.path.exists('/dev/uinput'):
+        return True
+    codename = detect_codename()
+    if not codename:
+        return False
+    build = _read_firmware_build()
+    if not build:
+        _log_missing_kmod(codename, mod='uinput')
+        return False
+    kernel = os.uname().release
+    expected = f"uinput-{kernel}-{build}-{codename}.ko"
+    candidates = _find_bundled_kos(f"uinput-{kernel}-*-{codename}.ko", exact_first=expected)
+    if not candidates:
+        _log_missing_kmod(codename, expected, mod='uinput')
+        return False
+    for ko in candidates:
+        log.info(f"loading {os.path.basename(ko)}")
+        if not run(['/sbin/insmod', ko]):
+            continue
+        if not os.path.exists('/dev/uinput'):
+            _create_dev_node('/sys/class/misc/uinput/dev', '/dev/uinput')
+        if os.path.exists('/dev/uinput'):
+            return True
+    _log_missing_kmod(codename, expected, mod='uinput')
+    return False
+
+
 def prepare_bt():
     """Load uhid if needed, then prepare the chip. True if BT is ready."""
     ensure_uhid()
+    ensure_uinput()
     log.info("Preparing Bluetooth hardware...")
     return chip().prepare()
