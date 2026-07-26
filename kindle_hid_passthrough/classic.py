@@ -96,30 +96,14 @@ class ClassicMixin:
 
             self.hid_host.on_device_connection(connection)
 
-            auth_event = asyncio.Event()
-
-            def on_auth():
-                log.success("[Classic] Device authenticated us")
-                auth_event.set()
-
-            def on_auth_fail(error):
-                log.warning(f"[Classic] Auth failed: {error}")
-                auth_event.set()
-
-            connection.on('connection_authentication', on_auth)
-            connection.on('connection_authentication_failure', on_auth_fail)
-
-            log.info("[Classic] Waiting for device authentication...")
-            try:
-                await asyncio.wait_for(auth_event.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                log.warning("[Classic] No auth request from device, continuing...")
-
-            try:
-                connection.remove_listener('connection_authentication', on_auth)
-                connection.remove_listener('connection_authentication_failure', on_auth_fail)
-            except Exception:
-                pass
+            if not connection.is_encrypted:
+                log.info("[Classic] Restoring bonding (authenticate + encrypt)...")
+                try:
+                    await asyncio.wait_for(connection.authenticate(), timeout=5.0)
+                    await asyncio.wait_for(connection.encrypt(enable=True), timeout=5.0)
+                    log.success("[Classic] Bonding restored")
+                except Exception as e:
+                    log.warning(f"[Classic] Bonding restore failed: {e}")
 
             if self._disconnection_event.is_set():
                 log.warning("[Classic] Connection lost during authentication")
