@@ -36,3 +36,9 @@ across firmware updates, so a covered model may still hit an unbuilt build. When
 Kindle hits a missing module the daemon logs the exact `uhid-...ko` filename plus
 its model, codename, kernel, and `/etc/version.txt`, which is everything needed to
 build it.
+
+A module's ABI keys on `uname -r`, not the version.txt build in its filename, so
+when the exact build isn't bundled the daemon tries other builds of the same
+kernel and codename and lets `insmod`'s own version check decide. A firmware bump
+that keeps the kernel ABI loads on an existing module; only a real `module_layout`
+change forces a fresh build.

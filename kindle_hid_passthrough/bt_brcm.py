@@ -18,12 +18,16 @@ from logging_utils import log
 BT_DEV_WAKE_PATH = '/proc/bluetooth/sleep/btwake'
 BT_SLEEP_PROTO_PATH = '/proc/bluetooth/sleep/proto'
 BT_ENABLE_PATH = '/proc/bluetooth/btenable'
+BT_SLEEP_DIR = '/proc/bluetooth/sleep'
 BTENABLE_LIPC = ['lipc-set-prop', 'com.lab126.btfd', 'BTenable', '1:1']
 BSA_WARMUP_TIMEOUT = 12.0   # seconds to wait for bsa_server after BTenable
 BSA_FIRMWARE_SETTLE = 2.0   # let bsa finish the .hcd download before we take over
 BSA_WARMUP_RETRIES = 3      # btd-recovery attempts before giving up on warm-up
 BSA_MIN_AGE = 5.0           # bsa_server younger than this may be mid .hcd download
 POST_WAKE_SETTLE = 0.5      # let the chip settle after wake before first HCI cmd
+HCI_RESET_CMD = bytes([0x01, 0x03, 0x0c, 0x00])  # HCI_Reset command packet
+HCI_RESET_OK = bytes([0x04, 0x0e])               # Command Complete event prefix
+WAKE_VERIFY_ATTEMPTS = 5    # raw HCI Reset tries (re-pulsing wake) before giving up
 
 
 def _pgrep_x(name):
@@ -140,6 +144,7 @@ class BrcmChip(BtChip):
 
     def prepare(self):
         with self._power_lock:
+            log.warning("BCM (Broadcom) BT support is experimental")
             self._warm = False
             device_path = self.kindle.device_path
             if not os.path.exists(device_path):
@@ -153,21 +158,107 @@ class BrcmChip(BtChip):
             log.info(f"{device_path} ready (warm handoff complete; wake deferred to open)")
             return True
 
-    def on_transport_open(self):
-        try:
-            with open(BT_DEV_WAKE_PATH, 'w') as f:
-                f.write('0')
-            log.info("BCM chip woken (dev_wake asserted)")
-            time.sleep(0.3)
-        except OSError as e:
-            log.warning(f"Could not assert dev_wake: {e}")
+    def _sleep_state(self):
+        """Snapshot the bluesleep proc files for diagnostics."""
+        parts = []
+        for name in ('btwake', 'proto', 'asleep', 'hostwake'):
+            try:
+                parts.append(f"{name}={open(f'{BT_SLEEP_DIR}/{name}').read().strip()}")
+            except OSError:
+                parts.append(f"{name}=?")
+        return ' '.join(parts)
+
+    def _assert_wake(self):
+        """Disable bluesleep then assert dev_wake (active-low btwake=0)."""
         try:
             with open(BT_SLEEP_PROTO_PATH, 'w') as f:
                 f.write('0')
-            log.info("BCM bluesleep disabled (chip stays awake)")
-            time.sleep(0.2)
         except OSError as e:
             log.warning(f"Could not disable bluesleep: {e}")
+        try:
+            with open(BT_DEV_WAKE_PATH, 'w') as f:
+                f.write('0')
+        except OSError as e:
+            log.warning(f"Could not assert dev_wake: {e}")
+
+    def _wake_pulse(self):
+        """Toggle btwake 1->0 to force a fresh ext_wake edge at the chip."""
+        try:
+            with open(BT_DEV_WAKE_PATH, 'w') as f:
+                f.write('1')
+            time.sleep(0.05)
+            with open(BT_DEV_WAKE_PATH, 'w') as f:
+                f.write('0')
+        except OSError:
+            pass
+
+    def pre_open(self):
+        """Wake the chip and confirm it answers a raw HCI Reset before bumble
+        opens the transport.
+
+        On some BCM Kindles (KOA2/KOA3, zelda) the chip is still asleep when the
+        first HCI command goes out, so bumble's reset times out. Retrying at the
+        bumble layer corrupts its command pipeline, so we do the wake handshake
+        here on our own fd and only hand a proven-awake chip to bumble.
+        """
+        import serial
+        self._assert_wake()
+        time.sleep(POST_WAKE_SETTLE)
+        for attempt in range(1, WAKE_VERIFY_ATTEMPTS + 1):
+            cts = None
+            wrote = False
+            resp = b''
+            try:
+                s = serial.Serial()
+                s.port = self.kindle.device_path
+                s.baudrate = self.kindle.baud_rate or 2000000
+                s.rtscts = (self.kindle.flow_control == 'rtscts')
+                s.timeout = 0
+                s.write_timeout = 1.0
+                s.open()
+            except (OSError, ValueError) as e:
+                log.warning(f"BCM wake probe could not open transport: {e}")
+                return
+            try:
+                time.sleep(0.1)
+                cts = s.cts
+                try:
+                    s.reset_input_buffer()
+                except OSError:
+                    pass
+                try:
+                    s.write(HCI_RESET_CMD)
+                    wrote = True
+                except (OSError, serial.SerialTimeoutException):
+                    wrote = False
+                deadline = time.monotonic() + 0.6
+                while time.monotonic() < deadline:
+                    d = s.read(64)
+                    if d:
+                        resp += d
+                    else:
+                        time.sleep(0.02)
+            finally:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+            if resp.startswith(HCI_RESET_OK):
+                log.info(f"BCM chip awake; answered HCI Reset "
+                         f"(cts={cts}, {self._sleep_state()})")
+                return
+            log.warning(f"BCM wake attempt {attempt}/{WAKE_VERIFY_ATTEMPTS}: "
+                        f"no HCI Reset reply (cts={cts} wrote={wrote} "
+                        f"resp={resp.hex() or 'none'} {self._sleep_state()})")
+            self._wake_pulse()
+            time.sleep(0.2)
+        log.error("BCM chip never answered a raw HCI Reset after wake; "
+                  "transport reset will likely time out")
+
+    def on_transport_open(self):
+        self._assert_wake()
+        log.info(f"BCM chip woken (dev_wake asserted, bluesleep off, "
+                 f"{self._sleep_state()})")
         # Settle after wake before the first HCI command, else HCI Reset times out.
         time.sleep(POST_WAKE_SETTLE)
 

@@ -653,18 +653,6 @@ var BTManager = (function() {
         confirmAddr = null;
     }
 
-    // ---- Quit ----
-
-    function quit() {
-        pressBtn("btnBack");
-        if (typeof kindle !== "undefined" && kindle.appmgr && kindle.appmgr.startApplication) {
-            kindle.appmgr.startApplication("com.lab126.booklet.home");
-        } else if (typeof kindle !== "undefined" && kindle.appmgr && kindle.appmgr.back) {
-            kindle.appmgr.back();
-        }
-        request("/quit-app", function() {});
-    }
-
     // ---- Event Binding ----
 
     function bindBtn(id, fn) {
@@ -673,7 +661,6 @@ var BTManager = (function() {
     }
 
     function bindEvents() {
-        bindBtn("btnBack", quit);
         bindBtn("btnToggle", toggleBluetooth);
         bindBtn("btnScan", toggleScan);
         bindBtn("footerDebug", showLogs);

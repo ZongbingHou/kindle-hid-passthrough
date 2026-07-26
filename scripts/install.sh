@@ -72,6 +72,7 @@ installWAFApp()
 {
   echo " -> Installing BTManager app"
   if ! in_install_dir; then
+    mkdir -p "$INSTALL_DIR/illusion/BTManager"
     cp -r illusion/BTManager/* "$INSTALL_DIR/illusion/BTManager/"
     cp illusion/BTManager.sh "$INSTALL_DIR/illusion/BTManager.sh"
     cp illusion/install-waf-app.sh "$INSTALL_DIR/illusion/install-waf-app.sh"
