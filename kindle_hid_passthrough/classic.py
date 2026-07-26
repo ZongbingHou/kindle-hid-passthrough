@@ -13,7 +13,7 @@ from bumble.hid import HID_CONTROL_PSM, HID_INTERRUPT_PSM, Message
 from bumble.hid import Host as BumbleHIDHost
 from bumble.sdp import Client as SDPClient
 
-from config import Protocol, config, normalize_addr
+from config import Protocol, config, normalize_addr, clean_device_name
 from logging_utils import log
 
 FALLBACK_HID_DESCRIPTOR = bytes([
@@ -441,11 +441,7 @@ class ClassicMixin:
                             self._parse_hid_descriptor_list(attr.value)
                         elif hasattr(attr, 'id') and attr.id == 0x0100:
                             try:
-                                name = attr.value.value
-                                if isinstance(name, bytes):
-                                    name = name.split(b'\x00')[0].decode(
-                                        'utf-8', errors='ignore')
-                                name = str(name).strip()
+                                name = clean_device_name(attr.value.value)
                                 if name:
                                     self.device_name = name
                             except Exception:

@@ -44,12 +44,25 @@ def get_version() -> str:
         return f"{__version__}-{sha}"
     return __version__
 
-__all__ = ['config', 'Config', 'Protocol', 'normalize_addr', '__version__', 'get_version']
+__all__ = ['config', 'Config', 'Protocol', 'normalize_addr', 'clean_device_name',
+           '__version__', 'get_version']
 
 
 def normalize_addr(address: str) -> str:
     """Normalize Bluetooth address - strip /P suffix, uppercase."""
     return address.split('/')[0].upper()
+
+
+def clean_device_name(name) -> str:
+    """Decode a device name, dropping NUL padding and invalid bytes.
+
+    Fixed-length name buffers are usually NUL-padded C strings, and some
+    devices pad with junk that isn't valid UTF-8. Truncate at the first NUL
+    and drop remaining invalid bytes instead of rendering U+FFFD.
+    """
+    if isinstance(name, bytes):
+        name = name.split(b'\x00')[0].decode('utf-8', errors='ignore')
+    return str(name).strip()
 
 
 class Protocol(Enum):
