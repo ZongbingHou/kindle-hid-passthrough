@@ -89,9 +89,15 @@ class ClassicMixin:
 
             self._disconnection_event.clear()
 
+            conn_lost = asyncio.Event()
+
+            def on_conn_lost(reason):
+                conn_lost.set()
+
             self.connection = connection
             self.current_device_address = addr_str
             self.connected_protocol = Protocol.CLASSIC
+            connection.on('disconnection', on_conn_lost)
             connection.on('disconnection', self._on_disconnection)
 
             self.hid_host.on_device_connection(connection)
@@ -105,7 +111,7 @@ class ClassicMixin:
                 except Exception as e:
                     log.warning(f"[Classic] Bonding restore failed: {e}")
 
-            if self._disconnection_event.is_set():
+            if conn_lost.is_set():
                 log.warning("[Classic] Connection lost during authentication")
                 return
 
@@ -117,7 +123,7 @@ class ClassicMixin:
                 except Exception as e:
                     log.warning(f"[Classic] Control channel: {e}")
 
-            if self._disconnection_event.is_set():
+            if conn_lost.is_set():
                 log.warning("[Classic] Connection lost during channel setup")
                 return
 
@@ -129,7 +135,7 @@ class ClassicMixin:
                 except Exception as e:
                     log.warning(f"[Classic] Interrupt channel: {e}")
 
-            if self._disconnection_event.is_set():
+            if conn_lost.is_set():
                 log.warning("[Classic] Connection lost during channel setup")
                 return
 
@@ -159,7 +165,11 @@ class ClassicMixin:
                           or not hasattr(connection, 'transport')
             if not is_classic:
                 return
+            prev_task = getattr(self, '_classic_conn_task', None)
+            if prev_task is not None and not prev_task.done():
+                prev_task.cancel()
             task = asyncio.create_task(on_classic_connection(connection))
+            self._classic_conn_task = task
             self._connection_tasks.add(task)
             task.add_done_callback(self._connection_tasks.discard)
 
