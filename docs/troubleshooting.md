@@ -122,3 +122,29 @@ Try clearing the cache and re-pairing:
 rm -rf /mnt/us/kindle_hid_passthrough/cache/*.json
 /mnt/us/kindle_hid_passthrough/kindle-hid-passthrough --pair
 ```
+
+### Missed keypresses after idle on i.MX Kindles (8th-10th gen)
+
+Presses a few seconds apart work, but one after 10-30 seconds of reading does
+nothing, then recovers on its own. The SoC is entering a cpuidle state whose
+exit latency is longer than the UART RX FIFO can cover at 2 Mbaud, so the first
+bytes of the HCI packet are lost.
+
+The daemon holds a CPU latency ceiling while the transport is open. Confirm it
+took effect:
+```bash
+grep -E "cpuidle budget|CPU latency|cpuidle state" /var/log/hid_passthrough.log
+```
+
+Check what the kernel offers and how deep each state is:
+```bash
+for s in /sys/devices/system/cpu/cpu0/cpuidle/state*; do
+    echo "$(basename $s) $(cat $s/name) $(cat $s/latency)us disable=$(cat $s/disable)"
+done
+ls -l /dev/cpu_dma_latency
+```
+
+Resync messages mean bytes were lost but the parser recovered:
+```bash
+grep "HCI resync" /var/log/hid_passthrough.log
+```

@@ -13,6 +13,7 @@ import threading
 import time
 
 from bt_chip import BtChip, free_device, run
+from cpu_latency import CpuLatencyHold
 from logging_utils import log
 
 BT_DEV_WAKE_PATH = '/proc/bluetooth/sleep/btwake'
@@ -134,6 +135,7 @@ def _handoff_from_bsa(device_path):
 
 class BrcmChip(BtChip):
     survives_suspend = False
+    uart_hci = True
 
     def __init__(self, kindle):
         super().__init__(kindle)
@@ -141,6 +143,7 @@ class BrcmChip(BtChip):
         # half-power the chip; RLock since ensure_powered() calls prepare().
         self._power_lock = threading.RLock()
         self._warm = False  # True only after a successful handoff; reset by power_off
+        self._latency = CpuLatencyHold(kindle.baud_rate)
 
     def prepare(self):
         with self._power_lock:
@@ -257,14 +260,21 @@ class BrcmChip(BtChip):
 
     def on_transport_open(self):
         self._assert_wake()
+        # bluesleep is off, so HOST_WAKE no longer pulls the SoC out of idle
+        # ahead of the chip's data; keep the CPU shallow enough to catch it.
+        self._latency.acquire()
         log.info(f"BCM chip woken (dev_wake asserted, bluesleep off, "
                  f"{self._sleep_state()})")
         # Settle after wake before the first HCI command, else HCI Reset times out.
         time.sleep(POST_WAKE_SETTLE)
 
+    def on_transport_close(self):
+        self._latency.release()
+
     def power_off(self):
         with self._power_lock:
             self._warm = False
+            self._latency.release()
             try:
                 if open(BT_ENABLE_PATH).read().strip() == '0':
                     return

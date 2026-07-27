@@ -141,6 +141,11 @@ check:
     python3 -m py_compile {{src_dir}}/kindle_hid_passthrough/*.py
     @echo "All files compile OK!"
 
+# Run local unit tests (no Kindle required)
+test:
+    python3 {{src_dir}}/tests/test_hci_parser.py
+    python3 {{src_dir}}/tests/test_cpu_latency.py
+
 # Run mock API server for local WAF app testing
 mock-server:
     python3 {{src_dir}}/tests/mock_api_server.py

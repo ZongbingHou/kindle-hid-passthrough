@@ -38,6 +38,9 @@ class BtChip:
     # False -> daemon powers BT off before system sleep, re-warms after wake
     survives_suspend = True
 
+    # True -> HCI runs over a real UART that can drop bytes (issue #120)
+    uart_hci = False
+
     def __init__(self, kindle):
         self.kindle = kindle
 
@@ -50,6 +53,9 @@ class BtChip:
 
     def on_transport_open(self):
         """Run right after the transport opens, before the first HCI command."""
+
+    def on_transport_close(self):
+        """Run after the transport closes, to drop anything held for it."""
 
     def on_hci_reset_timeout(self):
         """Run after HCI Reset times out, before the connect attempt is retried."""
