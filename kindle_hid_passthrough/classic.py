@@ -109,31 +109,25 @@ class ClassicMixin:
                 log.warning("[Classic] Connection lost during authentication")
                 return
 
-            log.info("[Classic] Waiting for HID channels...")
-            for _ in range(30):
-                if self._disconnection_event.is_set():
-                    log.warning("[Classic] Connection lost while waiting for HID channels")
-                    return
-                if self.hid_host.l2cap_intr_channel and self.hid_host.l2cap_ctrl_channel:
-                    log.success("[Classic] HID channels opened")
-                    break
-                await asyncio.sleep(0.1)
-
-            if self._disconnection_event.is_set():
-                log.warning("[Classic] Connection lost during HID setup")
-                return
-
             if not self.hid_host.l2cap_ctrl_channel:
+                log.info("[Classic] Connecting to HID control channel...")
                 try:
                     await asyncio.wait_for(self.hid_host.connect_control_channel(), timeout=5.0)
-                except Exception:
-                    pass
+                    log.success("[Classic] HID control channel connected")
+                except Exception as e:
+                    log.warning(f"[Classic] Control channel: {e}")
+
+            if self._disconnection_event.is_set():
+                log.warning("[Classic] Connection lost during channel setup")
+                return
 
             if not self.hid_host.l2cap_intr_channel:
+                log.info("[Classic] Connecting to HID interrupt channel...")
                 try:
                     await asyncio.wait_for(self.hid_host.connect_interrupt_channel(), timeout=5.0)
-                except Exception:
-                    pass
+                    log.success("[Classic] HID interrupt channel connected")
+                except Exception as e:
+                    log.warning(f"[Classic] Interrupt channel: {e}")
 
             if self._disconnection_event.is_set():
                 log.warning("[Classic] Connection lost during channel setup")
