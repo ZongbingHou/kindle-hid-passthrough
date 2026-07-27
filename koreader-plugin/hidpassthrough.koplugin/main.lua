@@ -15,17 +15,13 @@ starting is done by spawning the binary directly with `--daemon`.
 --]]
 
 local ConfirmBox = require("ui/widget/confirmbox")
-local Device = require("device")
 local Dispatcher = require("dispatcher")
-local Event = require("ui/event")
 local InfoMessage = require("ui/widget/infomessage")
-local InputText = require("ui/widget/inputtext")
 local Menu = require("ui/widget/menu")
 local Screen = require("device").screen
 local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local rapidjson = require("rapidjson")
 local util = require("util")
@@ -36,12 +32,6 @@ local T = require("ffi/util").template
 local socket = require("socket")
 local http = require("socket.http")
 local ltn12 = require("ltn12")
-
-local ffi = require("ffi")
-local C = ffi.C
-local bit = require("bit")
-pcall(require, "ffi/posix_h")
-pcall(require, "ffi/fbink_input_h")
 
 local HIDPassthrough = WidgetContainer:extend{
     name = "hidpassthrough",
@@ -147,320 +137,6 @@ function HIDPassthrough:isRunning()
 end
 
 ------------------------------------------------------------------------------
--- Keyboard wiring
-------------------------------------------------------------------------------
--- TODO: Remove uevent handling once koreader/koreader-base#2327 and
--- koreader/koreader#15248 are merged upstream. Once those land, KOReader
--- will natively support uevent-based keyboard hot-plug on Kindle and
--- the polling logic below becomes unnecessary.
---
--- The hard part. Background: KOReader's input layer on Kindle reads from a
--- hardcoded list of /dev/input/event* devices opened at startup. The HID
--- daemon creates a uhid device only when a BLE keyboard actually connects,
--- which can happen long after the daemon started. KOReader's bundled
--- externalkeyboard.koplugin handles exactly this kind of situation, but it
--- self-disables on Kindle (it gates on Kobo USB-OTG sysfs paths and won't
--- even register otherwise — see plugins/externalkeyboard.koplugin/main.lua,
--- the early `return { disabled = true }` block).
---
--- We borrow upstream's actual mechanism — which works regardless of the
--- USB-OTG gating — and apply it from this plugin instead:
---
---   1. Use FBInkInput's fbink_input_check() to ask the kernel "is this path
---      a keyboard?". It returns an already-opened fd if yes.
---   2. Hand that fd to Device.input:fdopen(fd, path, name) — the three-arg
---      form that registers a pre-opened fd. (NOT Input:open(path), which
---      doesn't work for hot-added devices on Kindle: the C backend ends up
---      with a stale entry that fails the next epoll wait with ENODEV. We
---      learned that the hard way.)
---   3. Merge upstream's event_map_keyboard.lua into Device.input.event_map
---      and flip Device.hasKeyboard / hasKeys / hasDPad to truthy stubs, so
---      KOReader treats the new device as a real keyboard (event lookup,
---      input dialogs, focus, etc.). Without this, key codes from the new
---      fd would be silently dropped because the device's event_map has no
---      entries for QWERTY scancodes.
---   4. On removal, undo all of the above.
---
--- Since we can't subscribe to kernel uevents on Kindle the way the upstream
--- plugin does on Kobo, we poll. The polling is cheap: a few ioctls and a
--- directory listing every few seconds, only while the daemon is "on".
-
-HIDPassthrough.WATCHER_INTERVAL = 3 -- seconds
-
--- Try to load the FBInkInput library. It's part of koreader-base on Kobo
--- and Kindle, but we still wrap it in pcall so the plugin degrades cleanly
--- on platforms where it isn't available — the start/stop UI keeps working.
-local FBInkInput
-do
-    local ok, lib = pcall(function()
-        return ffi.loadlib("fbink_input", 1)
-    end)
-    if ok then
-        FBInkInput = lib
-    else
-        logger.warn("HIDPassthrough: fbink_input not available, keyboard "
-            .. "auto-attach disabled:", tostring(lib))
-    end
-end
-
--- NO_RECAP silences fbink_input_check's per-device log line. Absent on older
--- koreader-base builds, so resolve defensively.
-local INPUT_SCAN_FLAGS = 0
-do
-    local ok, flag = pcall(function() return C.NO_RECAP end)
-    if ok and flag then INPUT_SCAN_FLAGS = flag end
-end
-
--- Stub functions used to flip Device.has* properties on/off.
-local function yes() return true end
-local function no()  return false end
-
--- Module-level so attachments survive FileManager <-> ReaderUI re-instantiation.
-local kb_attached = {}
-local kb_count = 0
-local kb_original_caps = nil
-
--- Pull in the upstream keyboard event_map. Prefer the upstream copy (so we
--- get any improvements automatically); fall back to our bundled copy if it
--- isn't there.
-function HIDPassthrough:_loadKeyboardEventMap()
-    local upstream = "plugins/externalkeyboard.koplugin/event_map_keyboard.lua"
-    local f = io.open(upstream, "r")
-    if f then
-        f:close()
-        local ok, map = pcall(dofile, upstream)
-        if ok and type(map) == "table" then
-            return map
-        end
-        logger.warn("HIDPassthrough: failed to dofile upstream event_map:", map)
-    end
-    local bundled = "plugins/hidpassthrough.koplugin/event_map_keyboard.lua"
-    local ok, map = pcall(dofile, bundled)
-    if ok and type(map) == "table" then
-        return map
-    end
-    logger.warn("HIDPassthrough: failed to dofile bundled event_map:", map)
-    return nil
-end
-
--- Snapshot the device-wide input caps so we can restore them when the last
--- keyboard goes away. Idempotent across multiple keyboard connects.
-function HIDPassthrough:_snapshotDeviceCaps()
-    if kb_original_caps then return end
-    kb_original_caps = {
-        event_map       = Device.input.event_map,
-        keyboard_layout = Device.keyboard_layout,
-        hasKeyboard     = Device.hasKeyboard,
-        hasKeys         = Device.hasKeys,
-        hasFewKeys      = Device.hasFewKeys,
-        hasDPad         = Device.hasDPad,
-    }
-end
-
-function HIDPassthrough:_restoreDeviceCaps()
-    if not kb_original_caps then return end
-    Device.input.event_map = kb_original_caps.event_map
-    Device.keyboard_layout = kb_original_caps.keyboard_layout
-    Device.hasKeyboard     = kb_original_caps.hasKeyboard
-    Device.hasKeys         = kb_original_caps.hasKeys
-    Device.hasFewKeys      = kb_original_caps.hasFewKeys
-    Device.hasDPad         = kb_original_caps.hasDPad
-    kb_original_caps = nil
-end
-
--- Ask FBInkInput whether `path` is a keyboard. Returns a table with fd,
--- path, name, has_dpad on success, or nil if it isn't a keyboard or the
--- check failed. Mirrors upstream externalkeyboard.koplugin's checkKeyboard.
-function HIDPassthrough:_checkKeyboard(path)
-    if not FBInkInput then return nil end
-    local ok, result = pcall(function()
-        local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEYBOARD, 0,
-            INPUT_SCAN_FLAGS)
-        if dev == nil then return nil end
-        local r
-        if dev.matched then
-            r = {
-                fd       = tonumber(dev.fd),
-                path     = ffi.string(dev.path),
-                name     = ffi.string(dev.name),
-                has_dpad = bit.band(dev.type, C.INPUT_DPAD) ~= 0,
-            }
-        end
-        C.free(dev)
-        return r
-    end)
-    if not ok then
-        logger.dbg("HIDPassthrough: _checkKeyboard error for", path, ":", result)
-        return nil
-    end
-    return result
-end
-
--- List /dev/input/event* paths. Returns nil when the directory can't be
--- enumerated, so callers can tell "no devices" apart from "listing failed".
-local function listEventPaths()
-    local ok, paths = pcall(function()
-        local t = {}
-        for name in lfs.dir("/dev/input") do
-            if name:match("^event%d+$") then
-                table.insert(t, "/dev/input/" .. name)
-            end
-        end
-        return t
-    end)
-    if not ok then
-        logger.dbg("HIDPassthrough: /dev/input listing failed:", paths)
-        return nil
-    end
-    return paths
-end
-
--- Attach a keyboard given a checkKeyboard result. Idempotent: skips if the
--- path is already attached.
-function HIDPassthrough:_attachKeyboard(info)
-    if kb_attached[info.path] then return end
-
-    local ok, fd = pcall(Device.input.fdopen, Device.input,
-        info.fd, info.path, info.name)
-    if not ok then
-        logger.warn("HIDPassthrough: fdopen failed for", info.path, ":", fd)
-        return
-    end
-
-    self:_snapshotDeviceCaps()
-
-    local event_map = self:_loadKeyboardEventMap()
-    if event_map then
-        local merged = {}
-        util.tableMerge(merged, Device.input.event_map)
-        util.tableMerge(merged, event_map)
-        Device.input.event_map = merged
-    end
-
-    Device.hasKeyboard = yes
-    Device.hasKeys     = yes
-    Device.hasFewKeys  = no
-    if info.has_dpad then
-        Device.hasDPad = yes
-    end
-
-    kb_attached[info.path] = { fd = fd, has_dpad = info.has_dpad }
-    kb_count = kb_count + 1
-    logger.info("HIDPassthrough: attached keyboard", info.name, "@", info.path,
-        "(total:", kb_count, ")")
-
-    if kb_count == 1 then
-        UIManager:show(InfoMessage:new{
-            text = _("Keyboard connected"),
-            timeout = 1,
-        })
-        -- Tell every visible widget that a physical keyboard exists now,
-        -- so input fields enable hardware-keyboard handling. This is the
-        -- same dance the upstream external keyboard plugin does.
-        InputText.initInputEvents()
-        UIManager:broadcastEvent(Event:new("PhysicalKeyboardConnected"))
-    end
-end
-
--- Detach a keyboard by path. Closes the fd via Input:close, decrements the
--- count, and if it was the last one, restores device caps and broadcasts
--- the disconnect event.
-function HIDPassthrough:_detachKeyboard(path)
-    local entry = kb_attached[path]
-    if not entry then return end
-
-    local ok, err = pcall(Device.input.close, Device.input, path)
-    if not ok then
-        logger.warn("HIDPassthrough: close failed for", path, ":", err)
-    end
-
-    kb_attached[path] = nil
-    kb_count = kb_count - 1
-    logger.info("HIDPassthrough: detached keyboard", path,
-        "(remaining:", kb_count, ")")
-
-    if kb_count == 0 then
-        self:_restoreDeviceCaps()
-        UIManager:show(InfoMessage:new{
-            text = _("Keyboard disconnected"),
-            timeout = 1,
-        })
-        InputText.initInputEvents()
-        UIManager:broadcastEvent(Event:new("PhysicalKeyboardDisconnected"))
-    end
-end
-
--- TODO: Remove uevent handling once koreader/koreader-base#2327 and
--- koreader/koreader#15248 are merged upstream.
--- One reconciliation pass: check every existing /dev/input/event* against
--- fbink_input_check, attach any that are keyboards we don't know about,
--- and detach any we do know about that have disappeared.
-function HIDPassthrough:_reconcileKeyboards()
-    if not self._kb_watcher_active then return end
-    if not FBInkInput then return end
-
-    local event_paths = listEventPaths()
-    if not event_paths then
-        -- Listing failed; don't treat that as "all keyboards gone".
-        UIManager:scheduleIn(self.WATCHER_INTERVAL, self._reconcileKeyboardsCb)
-        return
-    end
-
-    local seen = {}
-    for _, path in ipairs(event_paths) do
-        seen[path] = true
-        if not kb_attached[path] then
-            local info = self:_checkKeyboard(path)
-            if info then
-                self:_attachKeyboard(info)
-            end
-        end
-    end
-
-    -- Detach anything we have that's no longer present.
-    local gone = {}
-    for path in pairs(kb_attached) do
-        if not seen[path] then table.insert(gone, path) end
-    end
-    for _, path in ipairs(gone) do
-        self:_detachKeyboard(path)
-    end
-
-    UIManager:scheduleIn(self.WATCHER_INTERVAL, self._reconcileKeyboardsCb)
-end
-
-function HIDPassthrough:_startKeyboardWatcher()
-    if self._kb_watcher_active then return end
-    if not FBInkInput then
-        logger.info("HIDPassthrough: keyboard watcher not started "
-            .. "(FBInkInput unavailable)")
-        return
-    end
-    self._kb_watcher_active = true
-    -- Bind a stable callback so UIManager:unschedule could find it if needed.
-    -- We don't actually unschedule by reference (the active flag handles it),
-    -- but it keeps the closure allocation out of the hot loop.
-    self._reconcileKeyboardsCb = function() self:_reconcileKeyboards() end
-    logger.info("HIDPassthrough: starting keyboard watcher")
-    UIManager:scheduleIn(1, self._reconcileKeyboardsCb)
-end
-
-function HIDPassthrough:_stopKeyboardWatcher()
-    if not self._kb_watcher_active then return end
-    self._kb_watcher_active = false
-    logger.info("HIDPassthrough: keyboard watcher stopped")
-end
-
-function HIDPassthrough:_detachAllKeyboards()
-    -- Snapshot keys first because _detachKeyboard mutates the table.
-    local paths = {}
-    for path in pairs(kb_attached) do table.insert(paths, path) end
-    for _, path in ipairs(paths) do
-        self:_detachKeyboard(path)
-    end
-end
-
-------------------------------------------------------------------------------
 -- Start / stop
 ------------------------------------------------------------------------------
 
@@ -499,23 +175,9 @@ function HIDPassthrough:start()
     local state = self:getState()
 
     if state == "on" then
-        -- Daemon already running. Still make sure the watcher is going, in
-        -- case the user toggled through "on -> off (watcher stops) -> on"
-        -- without us knowing about the first transition.
-        self:_startKeyboardWatcher()
         return true, _("HID Passthrough daemon is already running.")
     end
 
-    local ok, msg = self:_doStart(state)
-    if ok then
-        self:_startKeyboardWatcher()
-    end
-    return ok, msg
-end
-
--- The original start logic, factored out so start() can wrap it with input
--- device tracking.
-function HIDPassthrough:_doStart(state)
     if state == "off" then
         -- API server not up. Spawn the binary, which brings up both layers.
         local ok, err = self:_spawnBinary()
@@ -564,11 +226,6 @@ function HIDPassthrough:stop()
         -- the idle state we want). Either way, no work to do.
         return true, _("HID Passthrough daemon is not running.")
     end
-
-    -- Detach keyboards *before* asking the daemon to stop, so the input
-    -- read loop doesn't see fds vanish under it.
-    self:_stopKeyboardWatcher()
-    self:_detachAllKeyboards()
 
     -- Ask the API server to stop the HID daemon. The API server itself stays
     -- up, matching the BTManager behavior — that way the next /start is fast.
@@ -1152,34 +809,9 @@ end
 function HIDPassthrough:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
-
-    if kb_count > 0 then
-        self:_startKeyboardWatcher()
-        return
-    end
-
-    -- The daemon may already be running from a previous session (upstart,
-    -- kterm, or a leftover API server from an earlier KOReader run). If so,
-    -- kick the watcher so any keyboard connected later gets picked up. We
-    -- defer the HTTP probe to avoid blocking plugin init.
-    self._init_probe_cb = function()
-        self._init_probe_cb = nil
-        if self:isRunning() then
-            logger.info("HIDPassthrough: daemon already running on init, "
-                .. "starting keyboard watcher")
-            self:_startKeyboardWatcher()
-        end
-    end
-    UIManager:scheduleIn(2, self._init_probe_cb)
 end
 
--- Fires on every FileManager <-> ReaderUI switch; keyboards stay attached.
 function HIDPassthrough:onCloseWidget()
-    if self._init_probe_cb then
-        UIManager:unschedule(self._init_probe_cb)
-        self._init_probe_cb = nil
-    end
-    self:_stopKeyboardWatcher()
     self:_cancelPolls()
 end
 

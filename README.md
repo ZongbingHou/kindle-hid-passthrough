@@ -79,7 +79,7 @@ If you use KOReader, a bundled plugin gives you the same scan / pair / connect /
 
 ![KOReader plugin menu](koreader-plugin/screenshots/menu.png)
 
-Auto-installed via the interactive installer when `/mnt/us/koreader/plugins/` exists. See [`koreader-plugin/README.md`](koreader-plugin/README.md) for details.
+Auto-installed via the interactive installer when `/mnt/us/koreader/plugins/` exists. Requires KOReader 2026.07 or newer, which handles keyboard hot-plug natively. See [`koreader-plugin/README.md`](koreader-plugin/README.md) for details.
 
 ## Usage
 

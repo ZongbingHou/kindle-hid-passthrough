@@ -1,6 +1,6 @@
 # KOReader Plugin: HID Passthrough
 
-KOReader plugin that lets users start/stop the kindle-hid-passthrough Bluetooth HID daemon from within KOReader, and auto-detects connected keyboards via polling-based device enumeration.
+KOReader plugin that lets users start/stop the kindle-hid-passthrough Bluetooth HID daemon from within KOReader.
 
 Originally created by [@alllexx88](https://github.com/alllexx88) (see [issue #40](https://github.com/zampierilucas/kindle-hid-passthrough/issues/40)).
 
@@ -17,7 +17,12 @@ Full feature parity with the BTManager WAF app — you can manage everything fro
 - **Recent logs**: in-app log viewer with refresh, useful for debugging pairing issues
 - **Clear descriptor cache**: drop cached HID descriptors
 - **Daemon status**: version, configured devices, connected device, scanning / pairing flags
-- **Keyboard auto-attach**: BLE keyboards are wired into KOReader's input layer at runtime without restarting KOReader
+
+## Requirements
+
+KOReader 2026.07 "Sailing Walrus" or newer. Keyboards that connect while KOReader is running are picked up by KOReader's own `externalkeyboard` plugin, via the uevent input hot-plug support added in [koreader/koreader-base#2327](https://github.com/koreader/koreader-base/pull/2327) and [koreader/koreader#15248](https://github.com/koreader/koreader/pull/15248).
+
+On older builds this plugin's daemon controls still work, but a keyboard connected after KOReader started won't be seen until you restart KOReader.
 
 ## Installation
 
@@ -38,12 +43,3 @@ In KOReader, tap the top of the screen to bring up the menu bar, then:
 **cog icon (Settings) → Network → HID Passthrough**
 
 The sub-menu shows the daemon toggle, scan, paired devices, logs, and cache controls (see screenshot above). Long-pressing the "HID Passthrough" parent entry toggles the daemon without descending into the sub-menu.
-
-## Upstream KOReader PRs
-
-The uevent-based auto-detection / polling logic in this plugin works around limitations in KOReader's current input handling on Kindle. There are upstream PRs that would make this unnecessary once merged:
-
-- [koreader/koreader-base#2327](https://github.com/koreader/koreader-base/pull/2327)
-- [koreader/koreader#15248](https://github.com/koreader/koreader/pull/15248)
-
-Once those land, the keyboard wiring / polling sections of the plugin can be removed, and KOReader will natively handle uevent-based keyboard hot-plug on Kindle.
