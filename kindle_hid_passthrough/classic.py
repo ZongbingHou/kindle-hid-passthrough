@@ -228,7 +228,11 @@ class ClassicMixin:
                     await connect_task
 
                 except Exception as e:
-                    if "DISALLOWED" in str(e) or "PENDING" in str(e):
+                    msg = str(e)
+                    if "CONNECTION_ALREADY_EXISTS" in msg:
+                        log.info("[Classic] Peer paged us first; yielding to incoming link")
+                        await asyncio.sleep(2.0)
+                    elif "DISALLOWED" in msg or "PENDING" in msg:
                         log.warning("[Classic] HCI busy, waiting...")
                         await asyncio.sleep(5.0)
                     else:
