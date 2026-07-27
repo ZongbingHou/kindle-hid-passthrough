@@ -1,6 +1,6 @@
 # KOReader Plugin: HID Passthrough
 
-KOReader plugin that lets users start/stop the kindle-hid-passthrough Bluetooth HID daemon from within KOReader.
+KOReader plugin that lets users start/stop the kindle-hid-passthrough Bluetooth HID daemon from within KOReader, and bind any key on a connected device to any KOReader action.
 
 Originally created by [@alllexx88](https://github.com/alllexx88) (see [issue #40](https://github.com/zampierilucas/kindle-hid-passthrough/issues/40)).
 
@@ -17,6 +17,28 @@ Full feature parity with the BTManager WAF app — you can manage everything fro
 - **Recent logs**: in-app log viewer with refresh, useful for debugging pairing issues
 - **Clear descriptor cache**: drop cached HID descriptors
 - **Daemon status**: version, configured devices, connected device, scanning / pairing flags
+- **Key mappings**: bind any key on any connected device to any KOReader action
+
+## Key mappings
+
+**Settings → Network → HID Passthrough → Key mappings**
+
+Tap "Add a key…", press the key you want to bind, then pick an action for it. Actions come from KOReader's own Dispatcher, so anything you can bind to a gesture or a profile you can bind to a key: page turns, frontlight, night mode, font size, bookmarks, rotation, dictionary lookup, and so on. Modifier combos work where KOReader reports the modifier, so `Shift+F5` is a distinct binding from `F5`.
+
+Mappings are global — a key does the same thing in the reader and in the file browser — and live in `koreader/settings/hidpassthrough_keymap.lua`.
+
+This runs entirely in-process. It does not use, and does not need, the HTTP Inspector plugin — unlike [kindle-button-mapper's](https://github.com/zampierilucas/kindle-button-mapper-rs) `scripts/koreader.sh`, which shells out to `curl` against `localhost:8080` for each press. Use button-mapper when you want mappings that work system-wide, outside KOReader; use this when you only care about KOReader.
+
+### Keys that KOReader normally ignores
+
+KOReader drops key events whose scancode isn't in its input event map, which is why media keys, F13–F24 and gamepad buttons normally do nothing. `event_map_extra.lua` fills those gaps so they can be bound. It only ever adds codes KOReader left unset, so stock key behavior is untouched.
+
+If a key still doesn't register when you try to bind it, it's likely being sent as a HID consumer-control usage the daemon isn't translating to an evdev key code. Check with:
+
+```bash
+ssh kindle "cat /proc/bus/input/devices"
+just logs
+```
 
 ## Requirements
 

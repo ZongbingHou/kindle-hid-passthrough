@@ -15,13 +15,16 @@ starting is done by spawning the binary directly with `--daemon`.
 --]]
 
 local ConfirmBox = require("ui/widget/confirmbox")
+local DataStorage = require("datastorage")
+local Device = require("device")
 local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
+local InputContainer = require("ui/widget/container/inputcontainer")
+local LuaSettings = require("luasettings")
 local Menu = require("ui/widget/menu")
 local Screen = require("device").screen
 local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
-local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
 local rapidjson = require("rapidjson")
 local util = require("util")
@@ -33,7 +36,7 @@ local socket = require("socket")
 local http = require("socket.http")
 local ltn12 = require("ltn12")
 
-local HIDPassthrough = WidgetContainer:extend{
+local HIDPassthrough = InputContainer:extend{
     name = "hidpassthrough",
     is_doc_only = false,
 
@@ -134,6 +137,242 @@ end
 
 function HIDPassthrough:isRunning()
     return self:getState() == "on"
+end
+
+------------------------------------------------------------------------------
+-- Key mappings
+------------------------------------------------------------------------------
+--
+-- Binds any key from any input device to any KOReader Dispatcher action,
+-- executed in-process. This replaces the HTTP round-trip that
+-- kindle-button-mapper's scripts/koreader.sh does against the HTTP Inspector:
+-- no port 8080, no curl per keypress, no dependency on the Inspector plugin
+-- being enabled, and the full Dispatcher action list instead of a handful of
+-- hardcoded events.
+--
+-- We do this here rather than leaning on KOReader's own hotkeys.koplugin
+-- because that plugin bails out at load time on modern Kindles:
+--
+--   if not (Device:hasScreenKB() or Device:hasKeyboard()) then
+--       return { disabled = true }
+--   end
+--
+-- Only the K2/K3/DX-era Kindles set hasKeyboard, and PluginLoader caches the
+-- load result for the session, so a Bluetooth keyboard connecting later can't
+-- revive it. Its key list is also fixed at Shift/Alt + cursor/page-turn keys
+-- plus the alphabet, which isn't "any key".
+
+-- Bare modifiers are never bindable on their own — they'd fire while the user
+-- is still reaching for the second key.
+local MODIFIER_KEYS = {
+    Shift = true, Ctrl = true, Alt = true, Meta = true, Sym = true,
+    ScreenKB = true, LCtrl = true, LAlt = true, RAlt = true, LMeta = true,
+    RMeta = true, CapsLock = true,
+}
+
+-- Fixed order so a given combo always serializes to the same id.
+local MOD_ORDER = { "Shift", "Ctrl", "Alt", "Meta", "Sym", "ScreenKB" }
+
+-- "F13", "Shift+F13". No key in any KOReader event map is named "+", so this
+-- round-trips safely.
+local function keyToId(key)
+    local parts = {}
+    for _, mod in ipairs(MOD_ORDER) do
+        if key.modifiers[mod] then table.insert(parts, mod) end
+    end
+    table.insert(parts, key.key)
+    return table.concat(parts, "+")
+end
+
+local function idToSequence(id)
+    local seq = {}
+    for part in id:gmatch("[^+]+") do table.insert(seq, part) end
+    return seq
+end
+
+-- Shared across the FileManager and ReaderUI instances of the plugin, so a
+-- mapping added in one is live in the other without a flush/reopen cycle.
+local keymap_path = ffiutil.joinPath(DataStorage:getSettingsDir(),
+    "hidpassthrough_keymap.lua")
+local keymap_settings
+
+local function getKeymapSettings()
+    if not keymap_settings then
+        keymap_settings = LuaSettings:open(keymap_path)
+    end
+    return keymap_settings
+end
+
+-- KOReader drops EV_KEY events whose code isn't in Device.input.event_map, so
+-- media keys, F13-F24 and gamepad buttons never reach us at all. Fill in the
+-- gaps additively — never clobber a code the running map already claims.
+--
+-- Re-applied on connect/disconnect because externalkeyboard.koplugin swaps
+-- Device.input.event_map wholesale on attach and restores its own pre-attach
+-- snapshot on detach.
+function HIDPassthrough:_extendEventMap()
+    local map = Device.input and Device.input.event_map
+    if not map then return end
+
+    local ok, extra = pcall(dofile, ffiutil.joinPath(self.path, "event_map_extra.lua"))
+    if not ok or type(extra) ~= "table" then
+        logger.warn("HIDPassthrough: could not load event_map_extra:", extra)
+        return
+    end
+
+    local added = 0
+    for code, name in pairs(extra) do
+        if map[code] == nil then
+            map[code] = name
+            added = added + 1
+        end
+    end
+    logger.dbg("HIDPassthrough: added", added, "extra key codes to the event map")
+end
+
+function HIDPassthrough:registerKeyEvents()
+    self.key_events = {}
+    local keymap = getKeymapSettings().data
+    -- Register every mapped id, even ones with no action assigned yet. The
+    -- action table is looked up at execution time, so assigning or changing an
+    -- action takes effect immediately without re-registering.
+    for id in pairs(keymap) do
+        self.key_events["HIDPassthroughKey_" .. id] = {
+            idToSequence(id),
+            event = "HIDPassthroughKeyAction",
+            args = id,
+        }
+    end
+    logger.dbg("HIDPassthrough: registered",
+        util.tableSize(self.key_events), "key bindings")
+end
+
+function HIDPassthrough:onPhysicalKeyboardConnected()
+    self:_extendEventMap()
+    self:registerKeyEvents()
+end
+
+-- Overrides InputContainer's handler, which drops key_events outright. Keep its
+-- guard: if the device has no keys left at all, bindings can't fire anyway.
+function HIDPassthrough:onPhysicalKeyboardDisconnected()
+    self:_extendEventMap()
+    if Device:hasKeys() then
+        self:registerKeyEvents()
+    else
+        self.key_events = {}
+    end
+end
+
+function HIDPassthrough:onHIDPassthroughKeyAction(id)
+    local actions = getKeymapSettings().data[id]
+    if type(actions) ~= "table" or next(actions) == nil then return end
+    logger.dbg("HIDPassthrough: executing binding for", id)
+    Dispatcher:execute(actions)
+    return true
+end
+
+-- Modal that swallows the next real keypress and hands it back as an id.
+-- Overriding onKeyPress bypasses InputContainer's key_events matching, so we
+-- see keys that have no binding — which is the whole point.
+local KeyCapture = InfoMessage:extend{
+    on_key_captured = nil,
+}
+
+function KeyCapture:onKeyPress(key)
+    if MODIFIER_KEYS[key.key] then return true end
+    local callback = self.on_key_captured
+    UIManager:close(self)
+    if callback then callback(keyToId(key)) end
+    return true
+end
+
+function HIDPassthrough:captureKey(callback)
+    UIManager:show(KeyCapture:new{
+        text = _("Press the key you want to map.\n\nTap the screen to cancel."),
+        on_key_captured = callback,
+    })
+end
+
+function HIDPassthrough:genKeymapMenu()
+    local keymap = getKeymapSettings().data
+    local items = {
+        {
+            text = _("Add a key…"),
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                self:captureKey(function(id)
+                    if keymap[id] == nil then
+                        keymap[id] = {}
+                        self.updated = true
+                        self:registerKeyEvents()
+                    end
+                    if touchmenu_instance then
+                        touchmenu_instance:updateItems()
+                    end
+                    UIManager:show(InfoMessage:new{
+                        text = T(_("Bound %1. Pick an action for it below."), id),
+                        timeout = 3,
+                    })
+                end)
+            end,
+            separator = true,
+        },
+    }
+
+    local ids = {}
+    for id in pairs(keymap) do table.insert(ids, id) end
+    table.sort(ids)
+
+    for _, id in ipairs(ids) do
+        table.insert(items, {
+            text_func = function()
+                local actions = keymap[id]
+                local label = (actions and next(actions) ~= nil)
+                    and Dispatcher:menuTextFunc(actions)
+                    or _("No action")
+                return T("%1  →  %2", id, label)
+            end,
+            -- Built on demand: each one is the full Dispatcher action tree, and
+            -- building them all up front makes opening this menu crawl.
+            sub_item_table_func = function() return self:genKeyActionMenu(id) end,
+            ignored_by_menu_search = true,
+        })
+    end
+
+    if #ids == 0 then
+        table.insert(items, {
+            text = _("(no keys mapped yet)"),
+            enabled = false,
+        })
+    end
+
+    return items
+end
+
+function HIDPassthrough:genKeyActionMenu(id)
+    local keymap = getKeymapSettings().data
+    local sub_items = {}
+    Dispatcher:addSubMenu(self, sub_items, keymap, id)
+    table.insert(sub_items, {
+        text = _("Remove this key"),
+        callback = function(touchmenu_instance)
+            keymap[id] = nil
+            self.updated = true
+            self:registerKeyEvents()
+            if touchmenu_instance then
+                touchmenu_instance:backToUpperMenu()
+                touchmenu_instance:updateItems()
+            end
+        end,
+    })
+    return sub_items
+end
+
+function HIDPassthrough:onFlushSettings()
+    if self.updated then
+        getKeymapSettings():flush()
+        self.updated = false
+    end
 end
 
 ------------------------------------------------------------------------------
@@ -809,6 +1048,8 @@ end
 function HIDPassthrough:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+    self:_extendEventMap()
+    self:registerKeyEvents()
 end
 
 function HIDPassthrough:onCloseWidget()
@@ -859,6 +1100,12 @@ function HIDPassthrough:addToMainMenu(menu_items)
                 enabled_func = function() return self:isRunning() end,
                 keep_menu_open = true,
                 callback = function() self:showPairedDevices() end,
+            },
+            {
+                text = _("Key mappings"),
+                keep_menu_open = true,
+                sub_item_table_func = function() return self:genKeymapMenu() end,
+                separator = true,
             },
             {
                 text = _("Show daemon status"),
