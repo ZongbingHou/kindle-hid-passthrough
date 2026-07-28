@@ -23,7 +23,13 @@ Full feature parity with the BTManager WAF app — you can manage everything fro
 
 **Settings → Network → HID Passthrough → Key mappings**
 
-Tap "Add a key…", press the key you want to bind, then pick an action for it. Actions come from KOReader's own Dispatcher, so anything you can bind to a gesture or a profile you can bind to a key: page turns, frontlight, night mode, font size, bookmarks, rotation, dictionary lookup, and so on. Modifier combos work where KOReader reports the modifier, so `Shift+F5` is a distinct binding from `F5`.
+Tap "Add a key…", press the key you want to bind, then pick an action for it. Modifier combos work where KOReader reports the modifier, so `Shift+F5` is a distinct binding from `F5`.
+
+The action list opens on a short block of common ones — next/previous page, frontlight, night mode, menu, table of contents, bookmarks, rotate, back — because the full list runs to seven pages and the everyday bindings shouldn't need a hunt. Everything else is underneath, grouped exactly as KOReader groups it for gestures and profiles: anything you can bind to a gesture you can bind to a key.
+
+Next page and Previous page are added by this plugin. Upstream only ships "Turn pages", which is a number you dial in from a −100..100 spinner; these are the fixed ±1 steps as one-tap actions. They also show up in the gesture manager, so they're usable outside this plugin too.
+
+A key can run several actions at once — the entries are checkboxes, not radio buttons. That's Dispatcher behaviour, the same as gestures and profiles, and the last page of the action list has "Execute one by one" and "Show as QuickMenu" if you want a button to cycle or to offer a menu instead of firing everything.
 
 Mappings are global — a key does the same thing in the reader and in the file browser — and live in `koreader/settings/hidpassthrough_keymap.lua`.
 
@@ -41,6 +47,12 @@ If a key still doesn't register when you try to bind it, it's likely being sent 
 ssh kindle "cat /proc/bus/input/devices"
 just logs
 ```
+
+### Gamepads
+
+KOReader's `externalkeyboard` plugin only ever looks for keyboards, so a gamepad, which FBInk classifies as `JOYSTICK`, is never opened and its buttons reach nothing. This plugin opens those itself, so `BtnA` and friends become bindable like any other key.
+
+Only the buttons. Sticks and the D-pad hat are `EV_ABS` and never become key events, so they can't be bound here. If you want those, that's what [kindle-button-mapper](https://github.com/zampierilucas/kindle-button-mapper-rs) is for.
 
 ## Requirements
 

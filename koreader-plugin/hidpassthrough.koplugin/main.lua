@@ -180,6 +180,25 @@ local MODIFIER_KEYS = {
 -- Fixed order so a given combo always serializes to the same id.
 local MOD_ORDER = { "Shift", "Ctrl", "Alt", "Meta", "Sym", "ScreenKB" }
 
+-- Shortcuts to the actions people actually put on a button, so the common case
+-- doesn't mean paging through the seven-page Reader section to find "Turn
+-- pages". Referenced by Dispatcher key and never by title: Dispatcher owns the
+-- label, so upstream renames and new translations come for free, and a key it
+-- drops resolves to "Unknown item", which we skip. All of these are
+-- category="none", so the stored value is a plain true.
+local COMMON_ACTIONS = {
+    "hidpassthrough_next_page",
+    "hidpassthrough_prev_page",
+    "toggle_frontlight",
+    "night_mode",
+    "show_menu",
+    "toc",
+    "bookmarks",
+    "toggle_bookmark",
+    "iterate_rotation",
+    "back",
+}
+
 -- "F13", "Shift+F13". No key in any KOReader event map is named "+", so this
 -- round-trips safely.
 --
@@ -438,6 +457,36 @@ end
 function HIDPassthrough:genKeyActionMenu(id)
     local keymap = getKeymapSettings().data
     local sub_items = {}
+
+    local unknown = _("Unknown item")
+    for dummy, action in ipairs(COMMON_ACTIONS) do -- luacheck: ignore dummy
+        local title = Dispatcher:getNameFromItem(action, nil, true)
+        if title ~= unknown then
+            table.insert(sub_items, {
+                text = title,
+                checked_func = function()
+                    return keymap[id] ~= nil and keymap[id][action] ~= nil
+                end,
+                callback = function(touchmenu_instance)
+                    if keymap[id] == nil then keymap[id] = {} end
+                    if keymap[id][action] == nil then
+                        keymap[id][action] = true
+                        Dispatcher._addToOrder(keymap, id, action)
+                    else
+                        keymap[id][action] = nil
+                        Dispatcher._removeFromOrder(keymap, id, action)
+                    end
+                    self.updated = true
+                    if touchmenu_instance then
+                        touchmenu_instance:updateItems()
+                    end
+                end,
+            })
+        end
+    end
+    if #sub_items > 0 then
+        sub_items[#sub_items].separator = true
+    end
 
     Dispatcher:addSubMenu(self, sub_items, keymap, id)
     table.insert(sub_items, {
@@ -1104,6 +1153,24 @@ function HIDPassthrough:onDispatcherRegisterActions()
         general  = true,
     })
 
+    -- Upstream only ships "Turn pages", an absolutenumber you have to dial in
+    -- from a -100..100 spinner. For a page-turn button that's the wrong shape,
+    -- so register the two fixed steps as plain one-tap actions. Same
+    -- GotoViewRel event, arg baked in.
+    Dispatcher:registerAction("hidpassthrough_next_page", {
+        category = "none",
+        event    = "GotoViewRel",
+        arg      = 1,
+        title    = _("Next page"),
+        reader   = true,
+    })
+    Dispatcher:registerAction("hidpassthrough_prev_page", {
+        category = "none",
+        event    = "GotoViewRel",
+        arg      = -1,
+        title    = _("Previous page"),
+        reader   = true,
+    })
 end
 
 -- Run a start/stop/toggle action triggered by a gesture. We can't call the
