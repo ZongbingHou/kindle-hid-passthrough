@@ -36,6 +36,13 @@ local socket = require("socket")
 local http = require("socket.http")
 local ltn12 = require("ltn12")
 
+local lfs = require("libs/libkoreader-lfs")
+local ffi = require("ffi")
+local C = ffi.C
+local bit = require("bit")
+pcall(require, "ffi/posix_h")
+pcall(require, "ffi/fbink_input_h")
+
 local HIDPassthrough = InputContainer:extend{
     name = "hidpassthrough",
     is_doc_only = false,
@@ -235,6 +242,69 @@ function HIDPassthrough:_extendEventMap()
     logger.dbg("HIDPassthrough: added", added, "extra key codes to the event map")
 end
 
+------------------------------------------------------------------------------
+-- Gamepad attach
+------------------------------------------------------------------------------
+-- externalkeyboard.koplugin only ever checks INPUT_KEYBOARD, so a gamepad
+-- (JOYSTICK, to FBInk) never gets opened and its buttons reach nothing. Opening
+-- the fd is the whole fix; event_map_extra.lua already names the codes and
+-- key_events matching does the rest. Hot-plug comes from koreader-base's uevent
+-- listener. Buttons only: sticks and the D-pad hat are EV_ABS.
+
+local joystick_fds = {}
+
+local function checkJoystick(path)
+    local FBInkInput = ffi.loadlib("fbink_input", 1)
+    local dev = FBInkInput.fbink_input_check(path, C.INPUT_JOYSTICK, 0, 0)
+    local info
+    if dev ~= nil then
+        if dev.matched then
+            info = {
+                fd   = tonumber(dev.fd),
+                path = ffi.string(dev.path),
+                name = ffi.string(dev.name),
+            }
+        end
+        C.free(dev)
+    end
+    return info
+end
+
+function HIDPassthrough:_attachJoystick(path)
+    if joystick_fds[path] then return end
+    local info = checkJoystick(path)
+    if not info then return end
+
+    joystick_fds[info.path] = Device.input:fdopen(info.fd, info.path, info.name)
+    logger.info("HIDPassthrough: attached gamepad", info.name, "@", info.path)
+    -- Bindings may have been registered before the pad showed up.
+    self:_extendEventMap()
+    self:registerKeyEvents()
+end
+
+function HIDPassthrough:_detachJoystick(path)
+    if not joystick_fds[path] then return end
+    Device.input:close(path)
+    joystick_fds[path] = nil
+    logger.info("HIDPassthrough: detached gamepad", path)
+end
+
+function HIDPassthrough:_scanJoysticks()
+    for name in lfs.dir("/dev/input") do
+        if name:match("^event%d+$") then
+            self:_attachJoystick("/dev/input/" .. name)
+        end
+    end
+end
+
+function HIDPassthrough:onEvdevInputInsert(path)
+    UIManager:scheduleIn(0.5, function() self:_attachJoystick(path) end)
+end
+
+function HIDPassthrough:onEvdevInputRemove(path)
+    UIManager:scheduleIn(0.5, function() self:_detachJoystick(path) end)
+end
+
 function HIDPassthrough:registerKeyEvents()
     self.key_events = {}
     local keymap = getKeymapSettings().data
@@ -368,6 +438,7 @@ end
 function HIDPassthrough:genKeyActionMenu(id)
     local keymap = getKeymapSettings().data
     local sub_items = {}
+
     Dispatcher:addSubMenu(self, sub_items, keymap, id)
     table.insert(sub_items, {
         text = _("Remove this key"),
@@ -1032,6 +1103,7 @@ function HIDPassthrough:onDispatcherRegisterActions()
         title    = _("HID Passthrough: Toggle daemon"),
         general  = true,
     })
+
 end
 
 -- Run a start/stop/toggle action triggered by a gesture. We can't call the
@@ -1073,6 +1145,9 @@ function HIDPassthrough:init()
     self.ui.menu:registerToMainMenu(self)
     self:_extendEventMap()
     self:registerKeyEvents()
+    -- A pad may already be connected from a previous session; hot-plug after
+    -- this is covered by EvdevInputInsert.
+    self:_scanJoysticks()
 end
 
 function HIDPassthrough:onCloseWidget()
