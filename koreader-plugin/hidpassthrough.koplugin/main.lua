@@ -371,6 +371,9 @@ function HIDPassthrough:genKeyActionMenu(id)
     Dispatcher:addSubMenu(self, sub_items, keymap, id)
     table.insert(sub_items, {
         text = _("Remove this key"),
+        -- Without this TouchMenu closes the whole menu once the callback
+        -- returns, undoing the backToUpperMenu we just did.
+        keep_menu_open = true,
         callback = function(touchmenu_instance)
             keymap[id] = nil
             self.updated = true
