@@ -122,7 +122,7 @@ class ClassicMixin:
                     await asyncio.wait_for(connection.encrypt(enable=True), timeout=5.0)
                     log.success("[Classic] Bonding restored")
                 except Exception as e:
-                    log.warning(f"[Classic] Bonding restore failed: {e}")
+                    log.warning(f"[Classic] Bonding restore failed: {e!r}")
 
             if conn_lost.is_set():
                 log.warning("[Classic] Connection lost during authentication")
@@ -134,7 +134,7 @@ class ClassicMixin:
                     await asyncio.wait_for(self.hid_host.connect_control_channel(), timeout=5.0)
                     log.success("[Classic] HID control channel connected")
                 except Exception as e:
-                    log.warning(f"[Classic] Control channel: {e}")
+                    log.warning(f"[Classic] Control channel: {e!r}")
 
             if conn_lost.is_set():
                 log.warning("[Classic] Connection lost during channel setup")
@@ -146,7 +146,7 @@ class ClassicMixin:
                     await asyncio.wait_for(self.hid_host.connect_interrupt_channel(), timeout=5.0)
                     log.success("[Classic] HID interrupt channel connected")
                 except Exception as e:
-                    log.warning(f"[Classic] Interrupt channel: {e}")
+                    log.warning(f"[Classic] Interrupt channel: {e!r}")
 
             if conn_lost.is_set():
                 log.warning("[Classic] Connection lost during channel setup")
@@ -385,7 +385,7 @@ class ClassicMixin:
                 await asyncio.wait_for(self.connection.authenticate(), timeout=30.0)
                 log.success("[Classic] Authentication complete")
             except Exception as e:
-                log.warning(f"[Classic] Authentication: {e}")
+                log.warning(f"[Classic] Authentication: {e!r}")
 
             log.info("[Classic] Waiting for link key...")
             try:
@@ -402,7 +402,7 @@ class ClassicMixin:
                         timeout=10.0
                     )
                 except Exception as e:
-                    log.warning(f"[Classic] Encryption: {e}")
+                    log.warning(f"[Classic] Encryption: {e!r}")
 
             await self._query_classic_sdp(address)
 
@@ -485,14 +485,14 @@ class ClassicMixin:
             await asyncio.wait_for(self.hid_host.connect_control_channel(), timeout=5.0)
             log.success("[Classic] HID control channel connected")
         except Exception as e:
-            log.warning(f"[Classic] Control channel: {e}")
+            log.warning(f"[Classic] Control channel: {e!r}")
 
         log.info("[Classic] Connecting to HID interrupt channel...")
         try:
             await asyncio.wait_for(self.hid_host.connect_interrupt_channel(), timeout=5.0)
             log.success("[Classic] HID interrupt channel connected")
         except Exception as e:
-            log.warning(f"[Classic] Interrupt channel: {e}")
+            log.warning(f"[Classic] Interrupt channel: {e!r}")
 
         if not self.hid_host.l2cap_intr_channel:
             log.error("[Classic] Failed to connect HID interrupt channel")
