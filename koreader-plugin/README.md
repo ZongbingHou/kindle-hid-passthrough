@@ -29,6 +29,8 @@ Mappings are global — a key does the same thing in the reader and in the file 
 
 This runs entirely in-process. It does not use, and does not need, the HTTP Inspector plugin — unlike [kindle-button-mapper's](https://github.com/zampierilucas/kindle-button-mapper-rs) `scripts/koreader.sh`, which shells out to `curl` against `localhost:8080` for each press. Use button-mapper when you want mappings that work system-wide, outside KOReader; use this when you only care about KOReader.
 
+Binding a key KOReader already uses for something (arrows, Enter, page-turn keys) is allowed, but whether your binding or the built-in behavior wins depends on event propagation order, so prefer keys the reader doesn't already claim. If a binding leaves you stuck, delete `koreader/settings/hidpassthrough_keymap.lua` and restart KOReader.
+
 ### Keys that KOReader normally ignores
 
 KOReader drops key events whose scancode isn't in its input event map, which is why media keys, F13–F24 and gamepad buttons normally do nothing. `event_map_extra.lua` fills those gaps so they can be bound. It only ever adds codes KOReader left unset, so stock key behavior is untouched.

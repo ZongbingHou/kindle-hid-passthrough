@@ -175,10 +175,15 @@ local MOD_ORDER = { "Shift", "Ctrl", "Alt", "Meta", "Sym", "ScreenKB" }
 
 -- "F13", "Shift+F13". No key in any KOReader event map is named "+", so this
 -- round-trips safely.
+--
+-- Reads the modifiers off the Key object's own hash rather than key.modifiers.
+-- Key:new stores a live reference to Input's modifier table, so key.modifiers
+-- reflects whatever is held down right now; the hash entries are a snapshot
+-- taken when the key was pressed, which is what we actually want.
 local function keyToId(key)
     local parts = {}
     for _, mod in ipairs(MOD_ORDER) do
-        if key.modifiers[mod] then table.insert(parts, mod) end
+        if key[mod] then table.insert(parts, mod) end
     end
     table.insert(parts, key.key)
     return table.concat(parts, "+")
@@ -280,9 +285,12 @@ local KeyCapture = InfoMessage:extend{
 
 function KeyCapture:onKeyPress(key)
     if MODIFIER_KEYS[key.key] then return true end
+    -- Serialize before closing, so nothing that runs on close can disturb the
+    -- key state we're reading.
+    local id = keyToId(key)
     local callback = self.on_key_captured
     UIManager:close(self)
-    if callback then callback(keyToId(key)) end
+    if callback then callback(id) end
     return true
 end
 
