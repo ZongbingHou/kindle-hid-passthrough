@@ -164,6 +164,7 @@ run:
 # Deploy KOReader plugin to Kindle
 deploy-koreader:
     @echo "Deploying KOReader plugin..."
+    ssh {{host}} "rm -rf /mnt/us/koreader/plugins/hidpassthrough.koplugin"
     (cd {{src_dir}} && tar cf - \
         --transform='s|^koreader-plugin/hidpassthrough.koplugin/|mnt/us/koreader/plugins/hidpassthrough.koplugin/|' \
         koreader-plugin/hidpassthrough.koplugin/ \

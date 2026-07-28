@@ -182,7 +182,7 @@ local MOD_ORDER = { "Shift", "Ctrl", "Alt", "Meta", "Sym", "ScreenKB" }
 -- taken when the key was pressed, which is what we actually want.
 local function keyToId(key)
     local parts = {}
-    for _, mod in ipairs(MOD_ORDER) do
+    for dummy, mod in ipairs(MOD_ORDER) do -- luacheck: ignore dummy
         if key[mod] then table.insert(parts, mod) end
     end
     table.insert(parts, key.key)
@@ -314,7 +314,11 @@ function HIDPassthrough:genKeymapMenu()
                         self.updated = true
                         self:registerKeyEvents()
                     end
+                    -- updateItems() re-renders the cached item_table; it does
+                    -- not re-run sub_item_table_func, so swap in a freshly
+                    -- built list or the new key stays invisible.
                     if touchmenu_instance then
+                        touchmenu_instance.item_table = self:genKeymapMenu()
                         touchmenu_instance:updateItems()
                     end
                     UIManager:show(InfoMessage:new{
@@ -331,7 +335,9 @@ function HIDPassthrough:genKeymapMenu()
     for id in pairs(keymap) do table.insert(ids, id) end
     table.sort(ids)
 
-    for _, id in ipairs(ids) do
+    -- Not `for _, id`: that would shadow the gettext `_` for every closure
+    -- created in here, and `_("No action")` below would call a number.
+    for dummy, id in ipairs(ids) do -- luacheck: ignore dummy
         table.insert(items, {
             text_func = function()
                 local actions = keymap[id]
@@ -354,6 +360,8 @@ function HIDPassthrough:genKeymapMenu()
         })
     end
 
+    -- Consulted by TouchMenu:backToUpperMenu when a child marks us stale.
+    items.refresh_func = function() return self:genKeymapMenu() end
     return items
 end
 
@@ -368,8 +376,12 @@ function HIDPassthrough:genKeyActionMenu(id)
             self.updated = true
             self:registerKeyEvents()
             if touchmenu_instance then
+                -- Mark the key list stale so backToUpperMenu rebuilds it
+                -- through its refresh_func instead of redrawing the old table.
+                local stack = touchmenu_instance.item_table_stack
+                local parent = stack and stack[#stack]
+                if parent then parent.needs_refresh = true end
                 touchmenu_instance:backToUpperMenu()
-                touchmenu_instance:updateItems()
             end
         end,
     })
