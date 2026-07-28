@@ -8,6 +8,7 @@ from bumble.core import BT_BR_EDR_TRANSPORT, BT_HUMAN_INTERFACE_DEVICE_SERVICE, 
 from bumble.hci import (
     Address,
     HCI_Write_Scan_Enable_Command,
+    Role,
 )
 from bumble.hid import HID_CONTROL_PSM, HID_INTERRUPT_PSM, Message
 from bumble.hid import Host as BumbleHIDHost
@@ -101,6 +102,18 @@ class ClassicMixin:
             connection.on('disconnection', self._on_disconnection)
 
             self.hid_host.on_device_connection(connection)
+
+            if connection.role != Role.CENTRAL:
+                log.info("[Classic] Requesting role switch to central...")
+                try:
+                    await asyncio.wait_for(connection.switch_role(Role.CENTRAL), timeout=5.0)
+                    log.success("[Classic] Role switch complete, now central")
+                except Exception as e:
+                    log.warning(f"[Classic] Role switch failed: {e!r}")
+
+            if conn_lost.is_set():
+                log.warning("[Classic] Connection lost during role switch")
+                return
 
             if not connection.is_encrypted:
                 log.info("[Classic] Restoring bonding (authenticate + encrypt)...")
