@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import subprocess
-import unicodedata
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
@@ -49,9 +48,6 @@ __all__ = ['config', 'Config', 'Protocol', 'normalize_addr', 'clean_device_name'
            '__version__', 'get_version']
 
 
-_UNPRINTABLE_CATEGORIES = {'Cc', 'Cf', 'Co', 'Cs', 'Cn', 'Zl', 'Zp'}
-
-
 def normalize_addr(address: str) -> str:
     """Normalize Bluetooth address - strip /P suffix, uppercase."""
     return address.split('/')[0].upper()
@@ -74,8 +70,7 @@ def clean_device_name(name) -> str:
         name = bytes(name).split(b'\x00')[0].decode('utf-8', errors='ignore')
     cleaned = ''.join(
         ch for ch in str(name)
-        if ch == ' ' or (ch != '\ufffd'
-                         and unicodedata.category(ch) not in _UNPRINTABLE_CATEGORIES)
+        if ch == ' ' or (ch != '\ufffd' and ch.isprintable())
     )
     return cleaned.strip()
 
