@@ -25,7 +25,13 @@ Full feature parity with the BTManager WAF app — you can manage everything fro
 
 Tap "Add a key…", press the key you want to bind, then pick an action for it. Modifier combos work where KOReader reports the modifier, so `Shift+F5` is a distinct binding from `F5`.
 
+![Key mappings](screenshots/key-mappings.png)
+
 The action list opens on a short block of common ones — next/previous page, frontlight, night mode, menu, table of contents, bookmarks, rotate, back — because the full list runs to seven pages and the everyday bindings shouldn't need a hunt. Everything else is underneath, grouped exactly as KOReader groups it for gestures and profiles: anything you can bind to a gesture you can bind to a key.
+
+![Choosing an action](screenshots/key-actions.png)
+
+To drop a mapping, hold its row in the list, or use "Remove this key" at the bottom of that key's action list.
 
 Next page and Previous page are added by this plugin. Upstream only ships "Turn pages", which is a number you dial in from a −100..100 spinner; these are the fixed ±1 steps as one-tap actions. They also show up in the gesture manager, so they're usable outside this plugin too.
 

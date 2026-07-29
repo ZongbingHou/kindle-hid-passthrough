@@ -8,7 +8,11 @@
 
 A userspace Bluetooth HID host for Amazon Kindle e-readers. Connects Bluetooth HID devices (gamepads, keyboards, remotes) and passes input directly to Linux via UHID.
 
-> **Note:** This project is normally paired with [kindle-button-mapper-rs](https://github.com/zampierilucas/kindle-button-mapper-rs), which maps the connected controller's buttons to Kindle actions (page turns, etc.). Without it, gamepads and remotes connect but don't do anything useful.
+> **Note:** On its own this project only connects a device. Something still has to decide what its buttons *do*, or gamepads and remotes pair fine and then sit there.
+>
+> **If you only care about KOReader**, use the bundled [KOReader plugin](koreader-plugin/README.md). Bind any button to any KOReader action from inside KOReader, nothing else to install. That covers most people.
+>
+> **If you want mappings that work system-wide**, outside KOReader as well as in it, pair this with [kindle-button-mapper-rs](https://github.com/zampierilucas/kindle-button-mapper-rs). More setup, more power, and the only option for analog sticks.
 
 ## Overview
 
@@ -79,7 +83,11 @@ If you use KOReader, a bundled plugin gives you the same scan / pair / connect /
 
 ![KOReader plugin menu](koreader-plugin/screenshots/menu.png)
 
-Auto-installed via the interactive installer when `/mnt/us/koreader/plugins/` exists. Requires KOReader 2026.07 or newer, which handles keyboard hot-plug natively. See [`koreader-plugin/README.md`](koreader-plugin/README.md) for details.
+It also maps keys. Press a button on a connected keyboard, gamepad or remote and bind it to any KOReader action, in-process, with no extra daemon and no HTTP Inspector.
+
+![Key mappings](koreader-plugin/screenshots/key-mappings.png)
+
+For most people this is all you need, and it's the simpler half of the note at the top of this README. Auto-installed via the interactive installer when `/mnt/us/koreader/plugins/` exists. Requires KOReader 2026.07 or newer, which handles keyboard hot-plug natively. See [`koreader-plugin/README.md`](koreader-plugin/README.md) for details.
 
 ## Usage
 
