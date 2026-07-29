@@ -71,9 +71,17 @@ Install directly from [KindleForge](https://github.com/KindleTweaks/KindleForge)
 
 ### BTManager
 
-A built-in Kindle app for managing Bluetooth HID devices from the touchscreen — no SSH needed. Scan for devices, pair, remove, start/stop the daemon, all from the Kindle UI.
+A built-in Kindle app for managing Bluetooth HID devices from the touchscreen — no SSH needed. Scan for devices, pair, connect, remove, toggle the daemon, all from the Kindle UI.
 
-![BTManager scan & pair](docs/screenshots/btmanager-scan.png)
+![BTManager paired devices](docs/screenshots/btmanager-main.png)
+
+"Scan for Devices" looks for nearby BLE and Classic HID devices and pairs whatever you tap.
+
+![BTManager scanning](docs/screenshots/btmanager-scan.png)
+
+Tap a paired device for its status, protocol and address, with connect and remove.
+
+![BTManager device details](docs/screenshots/btmanager-device.png)
 
 Installed automatically via KindleForge. For manual installs, use option 6 in `scripts/install.sh`.
 
