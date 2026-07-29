@@ -1023,7 +1023,7 @@ function HIDPassthrough:showLogs()
 
     local viewer
     viewer = TextViewer:new{
-        title = _("HID Passthrough Logs"),
+        title = _("Recent logs"),
         text = text,
         justified = false,
         buttons_table = {
@@ -1043,6 +1043,10 @@ function HIDPassthrough:showLogs()
         },
     }
     UIManager:show(viewer)
+    -- Open on the newest lines, like tail.
+    if viewer.scroll_widget then
+        viewer.scroll_widget:scrollToBottom()
+    end
 end
 
 function HIDPassthrough:clearCache()
@@ -1170,7 +1174,7 @@ end
 
 function HIDPassthrough:addToMainMenu(menu_items)
     menu_items.hid_passthrough = {
-        text = _("HID Passthrough"),
+        text = _("BT Manager - HID Passthrough"),
         -- Land in Settings → Network alongside SSH.
         sorting_hint = "network",
         -- Top-level checked state mirrors the daemon, so users can see at
@@ -1209,21 +1213,26 @@ function HIDPassthrough:addToMainMenu(menu_items)
                 separator = true,
             },
             {
-                text = _("Show daemon status"),
-                keep_menu_open = true,
-                callback = function() self:showInfo() end,
-            },
-            {
-                text = _("Recent logs"),
-                keep_menu_open = true,
-                callback = function() self:showLogs() end,
-            },
-            {
-                text = _("Clear descriptor cache"),
-                enabled_func = function() return self:isRunning() end,
-                keep_menu_open = true,
-                callback = function() self:clearCache() end,
+                text = _("Debug"),
                 separator = true,
+                sub_item_table = {
+                    {
+                        text = _("Show daemon status"),
+                        keep_menu_open = true,
+                        callback = function() self:showInfo() end,
+                    },
+                    {
+                        text = _("Recent logs"),
+                        keep_menu_open = true,
+                        callback = function() self:showLogs() end,
+                    },
+                    {
+                        text = _("Clear descriptor cache"),
+                        enabled_func = function() return self:isRunning() end,
+                        keep_menu_open = true,
+                        callback = function() self:clearCache() end,
+                    },
+                },
             },
             {
                 text = _("About HID Passthrough"),

@@ -10,7 +10,7 @@ Originally created by [@alllexx88](https://github.com/alllexx88) (see [issue #40
 
 Full feature parity with the BTManager WAF app — you can manage everything from inside KOReader, no need to exit.
 
-- Adds a "HID Passthrough" entry under Settings > Network
+- Adds a "BT Manager - HID Passthrough" entry under Settings > Network
 - **Daemon control**: start / stop / toggle the HID daemon (also bindable to gestures via Dispatcher actions)
 - **Scan for devices**: discovers nearby BLE and Classic HID devices, with live-updating results menu
 - **Paired devices**: list paired devices with connect / disconnect / remove (forget) actions
@@ -21,7 +21,7 @@ Full feature parity with the BTManager WAF app — you can manage everything fro
 
 ## Key mappings
 
-**Settings → Network → HID Passthrough → Key mappings**
+**Settings → Network → BT Manager - HID Passthrough → Key mappings**
 
 Tap "Add a key…", press the key you want to bind, then pick an action for it. Modifier combos work where KOReader reports the modifier, so `Shift+F5` is a distinct binding from `F5`.
 
@@ -82,6 +82,6 @@ The kindle-hid-passthrough daemon must already be installed on the device at `/m
 
 In KOReader, tap the top of the screen to bring up the menu bar, then:
 
-**cog icon (Settings) → Network → HID Passthrough**
+**cog icon (Settings) → Network → BT Manager - HID Passthrough**
 
-The sub-menu shows the daemon toggle, scan, paired devices, logs, and cache controls (see screenshot above). Long-pressing the "HID Passthrough" parent entry toggles the daemon without descending into the sub-menu.
+The sub-menu shows the daemon toggle, scan, paired devices and key mappings, with status, logs and cache tucked under Debug. Long-pressing the parent entry toggles the daemon without descending into the sub-menu.

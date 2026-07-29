@@ -1,5 +1,5 @@
 local _ = require("gettext")
 return {
-    fullname = _("HID Passthrough"),
+    fullname = _("BT Manager - HID Passthrough"),
     description = _([[Start, stop, and inspect the kindle-hid-passthrough Bluetooth HID daemon from inside KOReader, and bind keys on connected devices to KOReader actions.]]),
 }

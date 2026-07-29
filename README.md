@@ -87,7 +87,7 @@ Installed automatically via KindleForge. For manual installs, use option 6 in `s
 
 ### KOReader plugin
 
-If you use KOReader, a bundled plugin gives you the same scan / pair / connect / disconnect / logs / cache controls from inside KOReader — no need to exit. Open via **cog icon (Settings) → Network → HID Passthrough**.
+If you use KOReader, a bundled plugin gives you the same scan / pair / connect / disconnect / logs / cache controls from inside KOReader — no need to exit. Open via **cog icon (Settings) → Network → BT Manager - HID Passthrough**.
 
 ![KOReader plugin menu](koreader-plugin/screenshots/menu.png)
 
