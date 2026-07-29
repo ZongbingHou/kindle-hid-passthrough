@@ -1,15 +1,5 @@
 --[[--
-HID Passthrough daemon manager.
-
-Adds a "HID Passthrough" entry to Settings → Network that lets the user
-start, stop, and check the status of the kindle-hid-passthrough daemon
-(https://github.com/zampierilucas/kindle-hid-passthrough) without leaving
-KOReader.
-
-The daemon exposes a small HTTP API on http://localhost:8321 (the same one
-used by the BTManager WAF app). When it's running, we use that API for
-status and to stop it. When it's not running, the API is unreachable, so
-starting is done by spawning the binary directly with `--daemon`.
+Manage the kindle-hid-passthrough daemon and map keys from inside KOReader.
 
 @module koplugin.hidpassthrough
 --]]
@@ -47,8 +37,7 @@ local HIDPassthrough = InputContainer:extend{
     name = "hidpassthrough",
     is_doc_only = false,
 
-    -- Defaults matching the upstream project layout. Override in
-    -- settings/hidpassthrough.lua if your install lives elsewhere.
+    -- Override in settings/hidpassthrough.lua if your install differs.
     DAEMON_BINARY = "/mnt/us/kindle_hid_passthrough/kindle-hid-passthrough",
     API_HOST      = "127.0.0.1",
     API_PORT      = 8321,
@@ -59,15 +48,12 @@ local HIDPassthrough = InputContainer:extend{
 -- HTTP helper
 ------------------------------------------------------------------------------
 
--- Tiny GET that returns the response body or (nil, err). We don't pull in a
--- JSON parser; we just look for substrings, since the daemon's responses are
--- short and well-known.
+-- Returns the response body or (nil, err).
 function HIDPassthrough:_httpGet(path)
     local url = string.format("http://%s:%d%s", self.API_HOST, self.API_PORT, path)
     local body_chunks = {}
 
-    -- Per-request timeout. socket.http.TIMEOUT is module-global, so save
-    -- and restore it to avoid bleeding into the rest of KOReader.
+    -- socket.http.TIMEOUT is module-global, so save and restore it.
     local saved_timeout = http.TIMEOUT
     http.TIMEOUT = self.API_TIMEOUT
 
@@ -103,29 +89,9 @@ end
 ------------------------------------------------------------------------------
 -- Daemon state
 ------------------------------------------------------------------------------
---
--- kindle-hid-passthrough is two-tier:
---
---   * An always-on HTTP API server (port 8321) that survives between HID
---     sessions and reports status / accepts /start and /stop commands.
---   * The actual HID daemon, which the API server starts and stops on
---     demand. Its state is reported in `daemon_running` from /status.
---
--- Spawning the binary directly (`kindle-hid-passthrough --daemon`) starts
--- *both* layers in one go.
---
--- That gives us three states:
---
---   "off"        — API server not reachable. Nothing is running. To turn on,
---                  spawn the binary; this brings up both layers.
---   "api_only"   — API server up, HID daemon off. To turn on, POST /start.
---   "on"         — Both layers running. To turn off, POST /stop (leaves the
---                  API server alive, matching what BTManager does).
---
--- The user-facing checkmark is true only for "on".
+-- "off" = API server down, "api_only" = server up but daemon stopped,
+-- "on" = both. Spawning the binary brings up both layers.
 
--- How long to wait for the daemon to come up before giving up. The bundled
--- Python interpreter + bumble import can easily take 5-10s on first start.
 HIDPassthrough.START_TIMEOUT = 15
 HIDPassthrough.STOP_TIMEOUT = 5
 
@@ -149,28 +115,9 @@ end
 ------------------------------------------------------------------------------
 -- Key mappings
 ------------------------------------------------------------------------------
---
--- Binds any key from any input device to any KOReader Dispatcher action,
--- executed in-process. This replaces the HTTP round-trip that
--- kindle-button-mapper's scripts/koreader.sh does against the HTTP Inspector:
--- no port 8080, no curl per keypress, no dependency on the Inspector plugin
--- being enabled, and the full Dispatcher action list instead of a handful of
--- hardcoded events.
---
--- We do this here rather than leaning on KOReader's own hotkeys.koplugin
--- because that plugin bails out at load time on modern Kindles:
---
---   if not (Device:hasScreenKB() or Device:hasKeyboard()) then
---       return { disabled = true }
---   end
---
--- Only the K2/K3/DX-era Kindles set hasKeyboard, and PluginLoader caches the
--- load result for the session, so a Bluetooth keyboard connecting later can't
--- revive it. Its key list is also fixed at Shift/Alt + cursor/page-turn keys
--- plus the alphabet, which isn't "any key".
+-- Not built on hotkeys.koplugin: it returns disabled unless hasScreenKB or
+-- hasKeyboard, which no modern Kindle sets, and PluginLoader caches that.
 
--- Bare modifiers are never bindable on their own — they'd fire while the user
--- is still reaching for the second key.
 local MODIFIER_KEYS = {
     Shift = true, Ctrl = true, Alt = true, Meta = true, Sym = true,
     ScreenKB = true, LCtrl = true, LAlt = true, RAlt = true, LMeta = true,
@@ -180,12 +127,8 @@ local MODIFIER_KEYS = {
 -- Fixed order so a given combo always serializes to the same id.
 local MOD_ORDER = { "Shift", "Ctrl", "Alt", "Meta", "Sym", "ScreenKB" }
 
--- Shortcuts to the actions people actually put on a button, so the common case
--- doesn't mean paging through the seven-page Reader section to find "Turn
--- pages". Referenced by Dispatcher key and never by title: Dispatcher owns the
--- label, so upstream renames and new translations come for free, and a key it
--- drops resolves to "Unknown item", which we skip. All of these are
--- category="none", so the stored value is a plain true.
+-- Shortcuts, so the common bindings don't mean paging through the full tree.
+-- By Dispatcher key, never by title, so renames and translations come free.
 local COMMON_ACTIONS = {
     "hidpassthrough_next_page",
     "hidpassthrough_prev_page",
@@ -199,13 +142,8 @@ local COMMON_ACTIONS = {
     "back",
 }
 
--- "F13", "Shift+F13". No key in any KOReader event map is named "+", so this
--- round-trips safely.
---
--- Reads the modifiers off the Key object's own hash rather than key.modifiers.
--- Key:new stores a live reference to Input's modifier table, so key.modifiers
--- reflects whatever is held down right now; the hash entries are a snapshot
--- taken when the key was pressed, which is what we actually want.
+-- "F13", "Shift+F13". Reads modifiers off the Key hash, not key.modifiers,
+-- which is a live reference to Input's table rather than a snapshot.
 local function keyToId(key)
     local parts = {}
     for dummy, mod in ipairs(MOD_ORDER) do -- luacheck: ignore dummy
@@ -221,8 +159,7 @@ local function idToSequence(id)
     return seq
 end
 
--- Shared across the FileManager and ReaderUI instances of the plugin, so a
--- mapping added in one is live in the other without a flush/reopen cycle.
+-- Shared across the FileManager and ReaderUI plugin instances.
 local keymap_path = ffiutil.joinPath(DataStorage:getSettingsDir(),
     "hidpassthrough_keymap.lua")
 local keymap_settings
@@ -234,13 +171,9 @@ local function getKeymapSettings()
     return keymap_settings
 end
 
--- KOReader drops EV_KEY events whose code isn't in Device.input.event_map, so
--- media keys, F13-F24 and gamepad buttons never reach us at all. Fill in the
--- gaps additively — never clobber a code the running map already claims.
---
--- Re-applied on connect/disconnect because externalkeyboard.koplugin swaps
--- Device.input.event_map wholesale on attach and restores its own pre-attach
--- snapshot on detach.
+-- KOReader drops EV_KEY events whose code isn't in event_map. Fill the gaps
+-- additively; re-applied on connect/disconnect since externalkeyboard swaps
+-- the whole map on attach and restores its snapshot on detach.
 function HIDPassthrough:_extendEventMap()
     local map = Device.input and Device.input.event_map
     if not map then return end
@@ -264,11 +197,8 @@ end
 ------------------------------------------------------------------------------
 -- Gamepad attach
 ------------------------------------------------------------------------------
--- externalkeyboard.koplugin only ever checks INPUT_KEYBOARD, so a gamepad
--- (JOYSTICK, to FBInk) never gets opened and its buttons reach nothing. Opening
--- the fd is the whole fix; event_map_extra.lua already names the codes and
--- key_events matching does the rest. Hot-plug comes from koreader-base's uevent
--- listener. Buttons only: sticks and the D-pad hat are EV_ABS.
+-- externalkeyboard only checks INPUT_KEYBOARD, so a gamepad (JOYSTICK to
+-- FBInk) never gets opened. Buttons only, sticks and the hat are EV_ABS.
 
 local joystick_fds = {}
 
@@ -294,13 +224,8 @@ function HIDPassthrough:_attachJoystick(path, force)
     local info = checkJoystick(path)
     if not info then return end
 
-    -- uhid destroys and recreates the node on every reconnect, so the same path
-    -- comes back as a new device while we still hold the dead one. Leaving that
-    -- fd registered makes the input poll fail with ENODEV ("Polling for input
-    -- events returned an error: 19") and then *nothing* reaches any plugin, not
-    -- just the pad. Always drop ours before opening the replacement. The close
-    -- can throw when the node is already gone, which is fine, we only care that
-    -- the fd stops being polled.
+    -- uhid recreates the node on reconnect; a stale fd makes the input poll
+    -- fail with ENODEV and then nothing reaches any plugin.
     if joystick_fds[info.path] then
         pcall(Device.input.close, Device.input, info.path)
         joystick_fds[info.path] = nil
@@ -328,8 +253,7 @@ function HIDPassthrough:_scanJoysticks()
     end
 end
 
--- An insert always means a new device, even at a path we already track, so
--- force the re-open rather than short-circuiting on the stale entry.
+-- An insert is always a new device, so force the re-open.
 function HIDPassthrough:onEvdevInputInsert(path)
     UIManager:scheduleIn(0.5, function() self:_attachJoystick(path, true) end)
 end
@@ -341,9 +265,8 @@ end
 function HIDPassthrough:registerKeyEvents()
     self.key_events = {}
     local keymap = getKeymapSettings().data
-    -- Register every mapped id, even ones with no action assigned yet. The
-    -- action table is looked up at execution time, so assigning or changing an
-    -- action takes effect immediately without re-registering.
+    -- Register every id, even unassigned: the action is resolved at press
+    -- time, so edits take effect without re-registering.
     for id in pairs(keymap) do
         self.key_events["HIDPassthroughKey_" .. id] = {
             idToSequence(id),
@@ -360,8 +283,7 @@ function HIDPassthrough:onPhysicalKeyboardConnected()
     self:registerKeyEvents()
 end
 
--- Overrides InputContainer's handler, which drops key_events outright. Keep its
--- guard: if the device has no keys left at all, bindings can't fire anyway.
+-- Overrides InputContainer's handler, which drops key_events outright.
 function HIDPassthrough:onPhysicalKeyboardDisconnected()
     self:_extendEventMap()
     if Device:hasKeys() then
@@ -379,17 +301,15 @@ function HIDPassthrough:onHIDPassthroughKeyAction(id)
     return true
 end
 
--- Modal that swallows the next real keypress and hands it back as an id.
--- Overriding onKeyPress bypasses InputContainer's key_events matching, so we
--- see keys that have no binding — which is the whole point.
+-- Overriding onKeyPress bypasses key_events matching, so unbound keys are
+-- visible here.
 local KeyCapture = InfoMessage:extend{
     on_key_captured = nil,
 }
 
 function KeyCapture:onKeyPress(key)
     if MODIFIER_KEYS[key.key] then return true end
-    -- Serialize before closing, so nothing that runs on close can disturb the
-    -- key state we're reading.
+    -- Serialize before closing.
     local id = keyToId(key)
     local callback = self.on_key_captured
     UIManager:close(self)
@@ -417,9 +337,8 @@ function HIDPassthrough:genKeymapMenu()
                         self.updated = true
                         self:registerKeyEvents()
                     end
-                    -- updateItems() re-renders the cached item_table; it does
-                    -- not re-run sub_item_table_func, so swap in a freshly
-                    -- built list or the new key stays invisible.
+                    -- updateItems() re-renders the cached item_table and
+                    -- doesn't re-run sub_item_table_func.
                     if touchmenu_instance then
                         touchmenu_instance.item_table = self:genKeymapMenu()
                         touchmenu_instance:updateItems()
@@ -438,8 +357,7 @@ function HIDPassthrough:genKeymapMenu()
     for id in pairs(keymap) do table.insert(ids, id) end
     table.sort(ids)
 
-    -- Not `for _, id`: that would shadow the gettext `_` for every closure
-    -- created in here, and `_("No action")` below would call a number.
+    -- Not `for _, id`: that shadows the gettext `_` in these closures.
     for dummy, id in ipairs(ids) do -- luacheck: ignore dummy
         table.insert(items, {
             text_func = function()
@@ -449,11 +367,9 @@ function HIDPassthrough:genKeymapMenu()
                     or _("No action")
                 return T("%1  →  %2", id, label)
             end,
-            -- Built on demand: each one is the full Dispatcher action tree, and
-            -- building them all up front makes opening this menu crawl.
+            -- On demand: each is the full Dispatcher tree.
             sub_item_table_func = function() return self:genKeyActionMenu(id) end,
-            -- The same thing lives at the bottom of the action tree, but that's
-            -- two pages in; holding the row is how you'd expect to drop it.
+            -- Also at the bottom of the action tree, but that's two pages in.
             hold_callback = function(touchmenu_instance)
                 UIManager:show(ConfirmBox:new{
                     text = T(_("Remove the mapping for %1?"), id),
@@ -478,7 +394,7 @@ function HIDPassthrough:genKeymapMenu()
         })
     end
 
-    -- Consulted by TouchMenu:backToUpperMenu when a child marks us stale.
+    -- Used by TouchMenu:backToUpperMenu when a child marks us stale.
     items.refresh_func = function() return self:genKeymapMenu() end
     return items
 end
@@ -526,14 +442,13 @@ function HIDPassthrough:genKeyActionMenu(id)
     Dispatcher:addSubMenu(self, sub_items, keymap, id)
     table.insert(sub_items, {
         text = _("Remove this key"),
-        -- Without this TouchMenu closes the whole menu once the callback
-        -- returns, undoing the backToUpperMenu we just did.
+        -- Or TouchMenu closes the menu after the callback, undoing our
+        -- backToUpperMenu.
         keep_menu_open = true,
         callback = function(touchmenu_instance)
             self:removeKey(id)
             if touchmenu_instance then
-                -- Mark the key list stale so backToUpperMenu rebuilds it
-                -- through its refresh_func instead of redrawing the old table.
+                -- Mark stale so backToUpperMenu rebuilds via refresh_func.
                 local stack = touchmenu_instance.item_table_stack
                 local parent = stack and stack[#stack]
                 if parent then parent.needs_refresh = true end
@@ -560,9 +475,7 @@ function HIDPassthrough:_spawnBinary()
     if not util.pathExists(self.DAEMON_BINARY) then
         return false, T(_("Daemon binary not found at %1."), self.DAEMON_BINARY)
     end
-    -- Detached background launch via setsid so it survives KOReader exiting.
-    -- The exit code of this command is meaningless: the subshell backgrounds
-    -- the process and returns immediately.
+    -- setsid so it survives KOReader exiting; exit code is meaningless.
     local cmd = string.format(
         "(setsid %s --daemon </dev/null >/dev/null 2>&1 &) 2>/dev/null || "
         .. "(%s --daemon </dev/null >/dev/null 2>&1 &)",
@@ -1164,9 +1077,7 @@ end
 ------------------------------------------------------------------------------
 
 function HIDPassthrough:onDispatcherRegisterActions()
-    -- These show up in the gesture manager under "General" category, so the
-    -- user can bind any of them to corner taps, swipes, multiswipes, or
-    -- physical buttons.
+
     Dispatcher:registerAction("hidpassthrough_start", {
         category = "none",
         event    = "HIDPassthroughStart",
@@ -1186,10 +1097,7 @@ function HIDPassthrough:onDispatcherRegisterActions()
         general  = true,
     })
 
-    -- Upstream only ships "Turn pages", an absolutenumber you have to dial in
-    -- from a -100..100 spinner. For a page-turn button that's the wrong shape,
-    -- so register the two fixed steps as plain one-tap actions. Same
-    -- GotoViewRel event, arg baked in.
+    -- Upstream only ships "Turn pages", a spinner. These are the fixed steps.
     Dispatcher:registerAction("hidpassthrough_next_page", {
         category = "none",
         event    = "GotoViewRel",
@@ -1206,11 +1114,7 @@ function HIDPassthrough:onDispatcherRegisterActions()
     })
 end
 
--- Run a start/stop/toggle action triggered by a gesture. We can't call the
--- blocking methods directly from the dispatcher's callback because start()
--- can wait up to 15 seconds for the daemon to come up, which would freeze
--- the UI mid-gesture. So we show an immediate toast acknowledging the
--- action and defer the real work to the next UI tick.
+-- start() can block up to 15s, so toast now and do the work next tick.
 function HIDPassthrough:_runActionAsync(label, fn)
     UIManager:show(InfoMessage:new{
         text = label,
@@ -1245,8 +1149,7 @@ function HIDPassthrough:init()
     self.ui.menu:registerToMainMenu(self)
     self:_extendEventMap()
     self:registerKeyEvents()
-    -- A pad may already be connected from a previous session; hot-plug after
-    -- this is covered by EvdevInputInsert.
+    -- A pad may already be connected.
     self:_scanJoysticks()
 end
 

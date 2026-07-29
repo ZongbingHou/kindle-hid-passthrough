@@ -1,16 +1,8 @@
 --[[--
-Extra Linux input event codes that KOReader's stock keyboard event map leaves
-unset.
+Input codes KOReader's stock event map leaves unset. Merged additively.
 
-KOReader drops any EV_KEY event whose code is absent from Device.input.event_map
-(frontend/device/input.lua, "do not handle keypress for keys we don't know"), so
-media keys, F13-F24, and gamepad buttons never reach a plugin at all. These
-entries are merged in additively — codes already present in the running event map
-are never overwritten.
-
-Deliberately absent: 320-335 (BTN_TOOL_*, BTN_TOUCH, BTN_STYLUS). Those only get
-intercepted before the event map lookup on snow and wacom protocols; on every
-other panel they would fall through and fire a key event on each screen contact.
+320-335 (BTN_TOOL_*, BTN_TOUCH) are deliberately absent: outside the snow and
+wacom protocols they'd fire a key event on every screen contact.
 
 @module koplugin.hidpassthrough.event_map_extra
 --]]
