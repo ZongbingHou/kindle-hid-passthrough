@@ -289,10 +289,22 @@ local function checkJoystick(path)
     return info
 end
 
-function HIDPassthrough:_attachJoystick(path)
-    if joystick_fds[path] then return end
+function HIDPassthrough:_attachJoystick(path, force)
+    if joystick_fds[path] and not force then return end
     local info = checkJoystick(path)
     if not info then return end
+
+    -- uhid destroys and recreates the node on every reconnect, so the same path
+    -- comes back as a new device while we still hold the dead one. Leaving that
+    -- fd registered makes the input poll fail with ENODEV ("Polling for input
+    -- events returned an error: 19") and then *nothing* reaches any plugin, not
+    -- just the pad. Always drop ours before opening the replacement. The close
+    -- can throw when the node is already gone, which is fine, we only care that
+    -- the fd stops being polled.
+    if joystick_fds[info.path] then
+        pcall(Device.input.close, Device.input, info.path)
+        joystick_fds[info.path] = nil
+    end
 
     joystick_fds[info.path] = Device.input:fdopen(info.fd, info.path, info.name)
     logger.info("HIDPassthrough: attached gamepad", info.name, "@", info.path)
@@ -316,8 +328,10 @@ function HIDPassthrough:_scanJoysticks()
     end
 end
 
+-- An insert always means a new device, even at a path we already track, so
+-- force the re-open rather than short-circuiting on the stale entry.
 function HIDPassthrough:onEvdevInputInsert(path)
-    UIManager:scheduleIn(0.5, function() self:_attachJoystick(path) end)
+    UIManager:scheduleIn(0.5, function() self:_attachJoystick(path, true) end)
 end
 
 function HIDPassthrough:onEvdevInputRemove(path)
@@ -438,6 +452,21 @@ function HIDPassthrough:genKeymapMenu()
             -- Built on demand: each one is the full Dispatcher action tree, and
             -- building them all up front makes opening this menu crawl.
             sub_item_table_func = function() return self:genKeyActionMenu(id) end,
+            -- The same thing lives at the bottom of the action tree, but that's
+            -- two pages in; holding the row is how you'd expect to drop it.
+            hold_callback = function(touchmenu_instance)
+                UIManager:show(ConfirmBox:new{
+                    text = T(_("Remove the mapping for %1?"), id),
+                    ok_text = _("Remove"),
+                    ok_callback = function()
+                        self:removeKey(id)
+                        if touchmenu_instance then
+                            touchmenu_instance.item_table = self:genKeymapMenu()
+                            touchmenu_instance:updateItems()
+                        end
+                    end,
+                })
+            end,
             ignored_by_menu_search = true,
         })
     end
@@ -452,6 +481,12 @@ function HIDPassthrough:genKeymapMenu()
     -- Consulted by TouchMenu:backToUpperMenu when a child marks us stale.
     items.refresh_func = function() return self:genKeymapMenu() end
     return items
+end
+
+function HIDPassthrough:removeKey(id)
+    getKeymapSettings().data[id] = nil
+    self.updated = true
+    self:registerKeyEvents()
 end
 
 function HIDPassthrough:genKeyActionMenu(id)
@@ -495,9 +530,7 @@ function HIDPassthrough:genKeyActionMenu(id)
         -- returns, undoing the backToUpperMenu we just did.
         keep_menu_open = true,
         callback = function(touchmenu_instance)
-            keymap[id] = nil
-            self.updated = true
-            self:registerKeyEvents()
+            self:removeKey(id)
             if touchmenu_instance then
                 -- Mark the key list stale so backToUpperMenu rebuilds it
                 -- through its refresh_func instead of redrawing the old table.
