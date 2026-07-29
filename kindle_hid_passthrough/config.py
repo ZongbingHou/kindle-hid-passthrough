@@ -14,7 +14,7 @@ from kindle_detect import detect_kindle
 if TYPE_CHECKING:
     pass
 
-__version__ = "3.9.1"
+__version__ = "3.10.1"
 __build_sha__ = None  # stamped by build scripts
 
 
@@ -54,15 +54,25 @@ def normalize_addr(address: str) -> str:
 
 
 def clean_device_name(name) -> str:
-    """Decode a device name, dropping NUL padding and invalid bytes.
+    """Decode a device name, dropping padding and unprintable characters.
 
-    Fixed-length name buffers are usually NUL-padded C strings, and some
-    devices pad with junk that isn't valid UTF-8. Truncate at the first NUL
-    and drop remaining invalid bytes instead of rendering U+FFFD.
+    Fixed-length name buffers are usually NUL-padded C strings, but some
+    devices pad with junk bytes. Dropping only *invalid* UTF-8 is not enough:
+    padding that happens to be valid UTF-8 decodes to control, unassigned or
+    private-use code points that still render as boxes or U+FFFD downstream.
+    So truncate at the first NUL, ignore undecodable bytes, then filter by
+    code point category. Accepts str too, since names arriving from bumble,
+    the HTTP API or devices.conf are already decoded.
     """
-    if isinstance(name, bytes):
-        name = name.split(b'\x00')[0].decode('utf-8', errors='ignore')
-    return str(name).strip()
+    if name is None:
+        return ''
+    if isinstance(name, (bytes, bytearray)):
+        name = bytes(name).split(b'\x00')[0].decode('utf-8', errors='ignore')
+    cleaned = ''.join(
+        ch for ch in str(name)
+        if ch == ' ' or (ch != '\ufffd' and ch.isprintable())
+    )
+    return cleaned.strip()
 
 
 class Protocol(Enum):
@@ -306,6 +316,7 @@ class Config:
         """
         logger = logging.getLogger(__name__)
         conf_file = self.devices_config_file
+        name = clean_device_name(name) if name else None
 
         dir_path = os.path.dirname(conf_file)
         if dir_path:
@@ -358,7 +369,7 @@ class Config:
                     parts = line.split(None, 2)  # Split into max 3 parts
                     address = parts[0] if parts[0] == '*' else normalize_addr(parts[0])
                     protocol = self._parse_protocol(parts[1]) if len(parts) > 1 else self.protocol
-                    name = parts[2] if len(parts) > 2 else None
+                    name = (clean_device_name(parts[2]) or None) if len(parts) > 2 else None
                     devices.append((address, protocol, name))
 
         return devices
