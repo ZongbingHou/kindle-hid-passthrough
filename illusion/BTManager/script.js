@@ -30,6 +30,7 @@ var BTManager = (function() {
 
     // Currently viewed device in detail overlay
     var detailDevice = null;
+    var detailRenderKey = "";
 
     // ---- XHR Helper ----
 
@@ -188,6 +189,8 @@ var BTManager = (function() {
             }
 
             lastStatus = data;
+
+            renderDeviceDetail();
         });
     }
 
@@ -239,7 +242,7 @@ var BTManager = (function() {
             var proto = escapeHtml(dev.protocol || "");
             var name = escapeHtml(dev.name || "") || addr;
 
-            html += '<div class="device-row" data-addr="' + addr + '" data-proto="' + proto + '" data-name="' + escapeHtml(dev.name || "") + '" data-connected="' + (isConnected ? '1' : '0') + '">';
+            html += '<div class="device-row" data-addr="' + addr + '" data-proto="' + proto + '" data-name="' + escapeHtml(dev.name || "") + '">';
             html += '<span class="device-row-chevron">&#x276F;</span>';
             html += '<div class="device-row-name' + (isConnected ? '' : ' idle') + '">' + name + '</div>';
             html += '<div class="device-row-sub">' + proto.toUpperCase() + '</div>';
@@ -250,49 +253,65 @@ var BTManager = (function() {
 
     // ---- Device Detail Overlay ----
 
-    function showDeviceDetail(addr, proto, name, isConnected) {
-        detailDevice = { addr: addr, proto: proto, name: name, connected: isConnected };
+    function showDeviceDetail(addr, proto, name) {
+        detailDevice = { addr: addr, proto: proto, name: name, connected: false };
+        detailRenderKey = "";
         window.scrollTo(0, 0);
+        renderDeviceDetail();
+        getEl("deviceOverlay").className = "device-overlay visible";
+    }
 
-        getEl("detailName").innerHTML = escapeHtml(name) || escapeHtml(addr);
+    function isDetailConnected() {
+        if (!detailDevice || !detailDevice.addr) return false;
+        if (!lastStatus || !lastStatus.connected_device) return false;
+        return lastStatus.connected_device.toUpperCase() === detailDevice.addr.toUpperCase();
+    }
+
+    function renderDeviceDetail() {
+        if (!detailDevice) return;
+
+        var isConnected = isDetailConnected();
+        detailDevice.connected = isConnected;
+
+        var uhid = isConnected && lastStatus ? (lastStatus.uhid_name || "") : "";
+        var inputs = isConnected && lastStatus && lastStatus.input_paths
+            ? lastStatus.input_paths.join(", ") : "";
+        var hidReady = isConnected && lastStatus ? lastStatus.hid_ready : null;
+
+        var key = [isConnected ? "1" : "0", String(hidReady), uhid, inputs,
+                   detailDevice.name, detailDevice.proto].join("|");
+        if (key === detailRenderKey) return;
+        detailRenderKey = key;
+
+        getEl("detailName").innerHTML = escapeHtml(detailDevice.name) || escapeHtml(detailDevice.addr);
         getEl("detailStatus").innerHTML = isConnected ? "&#x25CF; Connected" : "&#x25CB; Not Connected";
-        getEl("detailProtocol").innerHTML = escapeHtml(proto).toUpperCase();
-        getEl("detailAddress").innerHTML = escapeHtml(addr);
+        getEl("detailProtocol").innerHTML = escapeHtml(detailDevice.proto).toUpperCase();
+        getEl("detailAddress").innerHTML = escapeHtml(detailDevice.addr);
+        getEl("btnDetailAction").innerHTML = isConnected ? "Disconnect" : "Connect";
 
-        var actionBtn = getEl("btnDetailAction");
-        if (isConnected) {
-            actionBtn.innerHTML = "Disconnect";
-        } else {
-            actionBtn.innerHTML = "Connect";
-        }
-
-        // HID info
         var hidSection = getEl("detailHid");
         var hidWarn = getEl("detailHidWarning");
         hidSection.style.display = "none";
         hidWarn.style.display = "none";
 
-        if (isConnected && lastStatus) {
-            var uhid = lastStatus.uhid_name;
-            var inputs = lastStatus.input_paths;
-            if (lastStatus.hid_ready === false) {
+        if (isConnected) {
+            if (hidReady === false) {
                 hidWarn.style.display = "block";
                 getEl("detailUhid").innerHTML = "--";
                 getEl("detailInputPaths").innerHTML = "--";
                 hidSection.style.display = "block";
             } else if (uhid || inputs) {
-                getEl("detailUhid").innerHTML = escapeHtml(uhid || "--");
-                getEl("detailInputPaths").innerHTML = inputs && inputs.length ? escapeHtml(inputs.join(", ")) : "--";
+                getEl("detailUhid").innerHTML = escapeHtml(uhid) || "--";
+                getEl("detailInputPaths").innerHTML = escapeHtml(inputs) || "--";
                 hidSection.style.display = "block";
             }
         }
-
-        getEl("deviceOverlay").className = "device-overlay visible";
     }
 
     function hideDeviceDetail() {
         getEl("deviceOverlay").className = "device-overlay";
         detailDevice = null;
+        detailRenderKey = "";
     }
 
     function detailAction() {
@@ -712,8 +731,7 @@ var BTManager = (function() {
                     addr = row.getAttribute("data-addr");
                     proto = row.getAttribute("data-proto");
                     name = row.getAttribute("data-name");
-                    var isConn = row.getAttribute("data-connected") === "1";
-                    showDeviceDetail(addr, proto, name, isConn);
+                    showDeviceDetail(addr, proto, name);
                     return;
                 }
                 row = row.parentNode;
