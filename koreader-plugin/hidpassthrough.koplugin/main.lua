@@ -135,6 +135,7 @@ local MOD_ORDER = { "Shift", "Ctrl", "Alt", "Meta", "Sym", "ScreenKB" }
 local COMMON_ACTIONS = {
     "hidpassthrough_next_page",
     "hidpassthrough_prev_page",
+    "hidpassthrough_close",
     "toggle_frontlight",
     "night_mode",
     "show_menu",
@@ -1119,6 +1120,39 @@ function HIDPassthrough:onDispatcherRegisterActions()
         title    = _("Previous page"),
         reader   = true,
     })
+
+    Dispatcher:registerAction("hidpassthrough_close", {
+        category = "none",
+        event    = "HIDPassthroughClose",
+        title    = _("Close menu or dialog"),
+        general  = true,
+    })
+end
+
+-- Stops one short of ReaderUI/FileManager, whose onClose exits the book.
+function HIDPassthrough:onHIDPassthroughClose()
+    local target, reached_base
+    for widget in UIManager:topdown_widgets_iter() do
+        if widget == self.ui then
+            reached_base = true
+            break
+        end
+        if not target and not widget.toast and not widget.invisible then
+            target = widget
+        end
+    end
+    if not target or not reached_base then return true end
+
+    -- Deferred: we're inside UIManager's walk down the stack we're mutating.
+    UIManager:nextTick(function()
+        if not UIManager:isWidgetShown(target) then return end
+        if target.onClose then
+            target:onClose()
+        else
+            UIManager:close(target)
+        end
+    end)
+    return true
 end
 
 -- start() can block up to 15s, so toast now and do the work next tick.
@@ -1136,12 +1170,15 @@ function HIDPassthrough:_runActionAsync(label, fn)
     end)
 end
 
+-- true, or UIManager hands these to us again as an active widget.
 function HIDPassthrough:onHIDPassthroughStart()
     self:_runActionAsync(_("Starting HID Passthrough daemon…"), self.start)
+    return true
 end
 
 function HIDPassthrough:onHIDPassthroughStop()
     self:_runActionAsync(_("Stopping HID Passthrough daemon…"), self.stop)
+    return true
 end
 
 function HIDPassthrough:onHIDPassthroughToggle()
@@ -1149,6 +1186,7 @@ function HIDPassthrough:onHIDPassthroughToggle()
         and _("Stopping HID Passthrough daemon…")
         or  _("Starting HID Passthrough daemon…")
     self:_runActionAsync(label, self.toggle)
+    return true
 end
 
 -- AutoSuspend stops re-arming powerd's t1 timeout when auto-suspend is off (#136).
@@ -1175,6 +1213,10 @@ function HIDPassthrough:init()
     self.ui.menu:registerToMainMenu(self)
     self:_extendEventMap()
     self:registerKeyEvents()
+    -- Or no binding fires while a menu covers us. Same trick as Screenshoter.
+    if self.ui.active_widgets then
+        table.insert(self.ui.active_widgets, self)
+    end
     UIManager.event_hook:registerWidget("InputEvent", self)
     -- A pad may already be connected.
     self:_scanJoysticks()
