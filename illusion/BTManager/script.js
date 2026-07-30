@@ -11,6 +11,7 @@ var BTManager = (function() {
     var HELPER_URL = "http://localhost:8321";
     var POLL_INTERVAL = 3000;
     var MESSAGE_TIMEOUT = 4000;
+    var LOG_VIEW_MAX_CHARS = 6000;
 
     var pollTimer = null;
     var messageTimer = null;
@@ -96,7 +97,7 @@ var BTManager = (function() {
 
     function showMessage(text, isError) {
         var bar = getEl("messageBar");
-        bar.innerHTML = text;
+        setText(bar, text);
         bar.className = "message-bar visible" + (isError ? " error" : "");
         if (messageTimer) clearTimeout(messageTimer);
         messageTimer = setTimeout(function() {
@@ -104,12 +105,46 @@ var BTManager = (function() {
         }, MESSAGE_TIMEOUT);
     }
 
+    // Daemon log lines reach this page verbatim. They carry ANSI colour escapes
+    // and can carry C0/C1 control bytes, neither of which escapeHtml touches and
+    // both of which corrupt the WebKit view this runs in.
+    function sanitizeText(str) {
+        if (str === null || str === undefined) return "";
+        str = String(str);
+        str = str.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, "");
+        return str.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+    }
+
     function escapeHtml(str) {
+        str = sanitizeText(str);
         if (!str) return "";
         return str.replace(/&/g, "&amp;")
                   .replace(/</g, "&lt;")
                   .replace(/>/g, "&gt;")
                   .replace(/"/g, "&quot;");
+    }
+
+    // Assign log text as a text node rather than markup. escapeHtml is enough for
+    // correctness, but a text node cannot be reinterpreted as markup at all, which
+    // is the property worth having for content the page does not author.
+    function setText(el, text) {
+        if (!el) return;
+        text = sanitizeText(text);
+        while (el.firstChild) {
+            el.removeChild(el.firstChild);
+        }
+        el.appendChild(document.createTextNode(text));
+    }
+
+    // Cap what the viewer holds. The log endpoint is polled every few seconds and
+    // the oldest lines are the least interesting, so keep the tail.
+    function renderLogLines(lines) {
+        if (!lines) return "";
+        var text = sanitizeText(lines.join("\n"));
+        if (text.length > LOG_VIEW_MAX_CHARS) {
+            text = text.slice(text.length - LOG_VIEW_MAX_CHARS);
+        }
+        return text;
     }
 
     // ---- Toggle ----
@@ -503,7 +538,7 @@ var BTManager = (function() {
         window.scrollTo(0, 0);
         getEl("pairMessage").innerHTML = "Pairing...";
         getEl("pairAddr").innerHTML = escapeHtml(addr);
-        getEl("pairLogContent").innerHTML = "";
+        setText(getEl("pairLogContent"), "");
         getEl("pairOverlay").className = "pair-overlay visible";
         pollPairLogs();
 
@@ -569,7 +604,7 @@ var BTManager = (function() {
             if (!isPairing) return;
             if (data && data.lines) {
                 var viewer = getEl("pairLogContent");
-                viewer.innerHTML = escapeHtml(data.lines.join("\n"));
+                setText(viewer, renderLogLines(data.lines));
                 var container = viewer.parentNode;
                 container.scrollTop = container.scrollHeight;
             }
@@ -610,11 +645,11 @@ var BTManager = (function() {
     function fetchLogs() {
         request("/logs?lines=100", function(data, err) {
             if (err) {
-                getEl("logContent").innerHTML = "Error loading logs: " + escapeHtml(err);
+                setText(getEl("logContent"), "Error loading logs: " + err);
                 return;
             }
             if (data && data.lines) {
-                getEl("logContent").innerHTML = escapeHtml(data.lines.join("\n"));
+                setText(getEl("logContent"), renderLogLines(data.lines));
                 var viewer = getEl("logViewer");
                 viewer.scrollTop = viewer.scrollHeight;
             }
