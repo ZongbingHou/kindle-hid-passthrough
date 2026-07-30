@@ -2,12 +2,23 @@
 
 INSTALL_DIR="/mnt/us/kindle_hid_passthrough"
 
-# True when the script is running from the install dir itself, so the
-# cp commands below would be a no-op (source == destination).
+SRC_DIR=$(cd "$(dirname "$0")/.." && pwd)
+
+# True when source == destination, so the cp commands below would be a no-op.
 in_install_dir()
 {
-  [ "$(cd "$(dirname "$0")/.." && pwd)" = "$INSTALL_DIR" ] || \
-    [ "$(pwd)" = "$INSTALL_DIR" ]
+  [ "$SRC_DIR" = "$INSTALL_DIR" ]
+}
+
+koreaderPluginDir()
+{
+  for base in /mnt/us/koreader /mnt/base-us/koreader; do
+    if [ -d "$base/plugins" ]; then
+      echo "$base/plugins"
+      return 0
+    fi
+  done
+  return 1
 }
 
 installMainFiles()
@@ -15,10 +26,11 @@ installMainFiles()
   echo " -> Installing main program files"
   mkdir -p "$INSTALL_DIR/dist" "$INSTALL_DIR/illusion/BTManager" "$INSTALL_DIR/cache"
   if ! in_install_dir; then
-    cp -r dist/* "$INSTALL_DIR/dist/"
-    cp kindle-hid-passthrough "$INSTALL_DIR/"
-    cp libsyscall_wrapper.so "$INSTALL_DIR/"
-    cp config.ini "$INSTALL_DIR/"
+    cp -r "$SRC_DIR/dist/"* "$INSTALL_DIR/dist/"
+    cp "$SRC_DIR/kindle-hid-passthrough" "$INSTALL_DIR/"
+    cp "$SRC_DIR/libsyscall_wrapper.so" "$INSTALL_DIR/"
+    cp "$SRC_DIR/config.ini" "$INSTALL_DIR/"
+    cp -r "$SRC_DIR/scripts" "$SRC_DIR/assets" "$INSTALL_DIR/"
   fi
   chmod +x "$INSTALL_DIR/kindle-hid-passthrough"
   echo " -> Ready."
@@ -32,8 +44,10 @@ installAll()
   installUpstart
   installMainFiles
   installWAFApp
-  if [ -d /mnt/us/koreader/plugins/ ]; then
-    installKOReaderPlugin
+  if ! installKOReaderPlugin; then
+    echo ""
+    echo "Install finished WITH ERRORS: the KOReader plugin was not installed."
+    return 1
   fi
   echo ""
   echo "Installation complete. Open 'BT Manager' from the Kindle library."
@@ -43,7 +57,7 @@ installUdevRules()
 {
   echo " -> Installing udev rules"
   /usr/sbin/mntroot rw
-  cp assets/99-hid-keyboard.rules /etc/udev/rules.d
+  cp "$SRC_DIR/assets/99-hid-keyboard.rules" /etc/udev/rules.d
   /usr/sbin/udevadm control --reload-rules
   /usr/sbin/mntroot ro
   echo " -> Ready."
@@ -53,19 +67,19 @@ installUpstart()
 {
   echo " -> Installing upstart service"
   /usr/sbin/mntroot rw
-  cp assets/hid-passthrough.upstart /etc/upstart/hid-passthrough.conf
+  cp "$SRC_DIR/assets/hid-passthrough.upstart" /etc/upstart/hid-passthrough.conf
   /usr/sbin/mntroot ro
   echo " -> Ready."
 }
 
 pairDevice()
 {
-  ./kindle-hid-passthrough --pair 2>&1 | grep -v "libenvload.so"
+  (cd "$INSTALL_DIR" && ./kindle-hid-passthrough --pair 2>&1 | grep -v "libenvload.so")
 }
 
 listDevices()
 {
-  cat devices.conf
+  cat "$INSTALL_DIR/devices.conf"
 }
 
 installWAFApp()
@@ -73,9 +87,9 @@ installWAFApp()
   echo " -> Installing BTManager app"
   if ! in_install_dir; then
     mkdir -p "$INSTALL_DIR/illusion/BTManager"
-    cp -r illusion/BTManager/* "$INSTALL_DIR/illusion/BTManager/"
-    cp illusion/BTManager.sh "$INSTALL_DIR/illusion/BTManager.sh"
-    cp illusion/install-waf-app.sh "$INSTALL_DIR/illusion/install-waf-app.sh"
+    cp -r "$SRC_DIR/illusion/BTManager/"* "$INSTALL_DIR/illusion/BTManager/"
+    cp "$SRC_DIR/illusion/BTManager.sh" "$INSTALL_DIR/illusion/BTManager.sh"
+    cp "$SRC_DIR/illusion/install-waf-app.sh" "$INSTALL_DIR/illusion/install-waf-app.sh"
   fi
   if [ -f "$INSTALL_DIR/illusion/install-waf-app.sh" ]; then
     /bin/sh "$INSTALL_DIR/illusion/install-waf-app.sh"
@@ -86,14 +100,32 @@ installWAFApp()
 
 installKOReaderPlugin()
 {
-  if [ ! -d /mnt/us/koreader/plugins/ ]; then
+  PLUGINS_DIR=$(koreaderPluginDir) || {
     echo " -> KOReader not found, skipping plugin install"
-    return
+    return 0
+  }
+  SRC_PLUGIN="$SRC_DIR/koreader-plugin/hidpassthrough.koplugin"
+  if [ ! -f "$SRC_PLUGIN/main.lua" ]; then
+    echo "ERROR: plugin source not found at $SRC_PLUGIN" >&2
+    echo "       Run this script from the extracted release, not a partial copy." >&2
+    return 1
   fi
-  echo " -> Installing KOReader plugin"
-  rm -rf /mnt/us/koreader/plugins/hidpassthrough.koplugin
-  cp -r koreader-plugin/hidpassthrough.koplugin /mnt/us/koreader/plugins/hidpassthrough.koplugin
-  echo " -> Ready."
+
+  echo " -> Installing KOReader plugin into $PLUGINS_DIR"
+  DEST="$PLUGINS_DIR/hidpassthrough.koplugin"
+  rm -rf "$DEST"
+  if ! cp -r "$SRC_PLUGIN" "$DEST"; then
+    echo "ERROR: failed to copy the plugin to $DEST" >&2
+    return 1
+  fi
+
+  for f in main.lua _meta.lua event_map_extra.lua; do
+    if [ ! -f "$DEST/$f" ]; then
+      echo "ERROR: $f is missing from $DEST" >&2
+      return 1
+    fi
+  done
+  echo " -> Ready. Restart KOReader to load it."
 }
 
 uninstallAll()
@@ -168,13 +200,13 @@ print_menu()
 # Non-interactive entry point: `sh install.sh <action>` runs one action and exits.
 if [ $# -gt 0 ]; then
   case "$1" in
-    installAll)         installAll; exit 0 ;;
-    installUdevRules)   installUdevRules; exit 0 ;;
-    installUpstart)     installUpstart; exit 0 ;;
-    installMainFiles)   installMainFiles; exit 0 ;;
-    installWAFApp)      installWAFApp; exit 0 ;;
-    installKOReaderPlugin) installKOReaderPlugin; exit 0 ;;
-    uninstallAll)       uninstallAll; exit 0 ;;
+    installAll)         installAll; exit $? ;;
+    installUdevRules)   installUdevRules; exit $? ;;
+    installUpstart)     installUpstart; exit $? ;;
+    installMainFiles)   installMainFiles; exit $? ;;
+    installWAFApp)      installWAFApp; exit $? ;;
+    installKOReaderPlugin) installKOReaderPlugin; exit $? ;;
+    uninstallAll)       uninstallAll; exit $? ;;
     *) echo "Unknown action: $1" >&2; exit 1 ;;
   esac
 fi
