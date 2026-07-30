@@ -49,7 +49,7 @@ Kernels without UHID support are handled automatically: the daemon loads a bundl
 
 ### Video guide
 
-Community walkthrough by [@jencaps89](https://www.tiktok.com/@jencaps89) showing the whole setup as a Bluetooth page turner, [watch it on TikTok](https://www.tiktok.com/@jencaps89/video/7658167614736223496) or through the [embedded player](https://www.tiktok.com/player/v1/7658167614736223496) if you'd rather not log in. Made by the community rather than by me, so it can drift from the current release.
+Community walkthrough by [@jencaps89](https://www.tiktok.com/@jencaps89) showing the whole setup as a Bluetooth page turner, [watch it on TikTok](https://www.tiktok.com/@jencaps89/video/7658167614736223496) or through the [embedded player](https://www.tiktok.com/player/v1/7658167614736223496) if you'd rather not log in.
 
 ### KindleForge (recommended)
 
