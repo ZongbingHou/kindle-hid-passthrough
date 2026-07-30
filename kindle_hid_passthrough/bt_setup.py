@@ -146,31 +146,27 @@ def ensure_uhid():
 
 
 def ensure_uinput():
-    """Load bundled uinput.ko on Kindles whose stock kernel lacks CONFIG_INPUT_UINPUT."""
+    """Best-effort /dev/uinput: stock module, then bundled .ko, else warn."""
     if os.path.exists('/dev/uinput'):
         return True
+    # Device may ship uinput.ko itself (in /lib/modules) even if not built-in.
+    if run(['/sbin/modprobe', 'uinput']) and os.path.exists('/dev/uinput'):
+        return True
     codename = detect_codename()
-    if not codename:
-        return False
-    build = _read_firmware_build()
-    if not build:
-        _log_missing_kmod(codename, mod='uinput')
-        return False
-    kernel = os.uname().release
-    expected = f"uinput-{kernel}-{build}-{codename}.ko"
-    candidates = _find_bundled_kos(f"uinput-{kernel}-*-{codename}.ko", exact_first=expected)
-    if not candidates:
-        _log_missing_kmod(codename, expected, mod='uinput')
-        return False
-    for ko in candidates:
-        log.info(f"loading {os.path.basename(ko)}")
-        if not run(['/sbin/insmod', ko]):
-            continue
-        if not os.path.exists('/dev/uinput'):
-            _create_dev_node('/sys/class/misc/uinput/dev', '/dev/uinput')
-        if os.path.exists('/dev/uinput'):
-            return True
-    _log_missing_kmod(codename, expected, mod='uinput')
+    build = _read_firmware_build() if codename else None
+    if codename and build:
+        kernel = os.uname().release
+        expected = f"uinput-{kernel}-{build}-{codename}.ko"
+        for ko in _find_bundled_kos(f"uinput-{kernel}-*-{codename}.ko", exact_first=expected):
+            log.info(f"loading {os.path.basename(ko)}")
+            if not run(['/sbin/insmod', ko]):
+                continue
+            if not os.path.exists('/dev/uinput'):
+                _create_dev_node('/sys/class/misc/uinput/dev', '/dev/uinput')
+            if os.path.exists('/dev/uinput'):
+                return True
+    log.warning("uinput unavailable; external tools (e.g. button-mapper) won't "
+                "work, HID passthrough is unaffected")
     return False
 
 
