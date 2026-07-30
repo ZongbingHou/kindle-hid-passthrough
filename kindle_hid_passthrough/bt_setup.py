@@ -69,17 +69,25 @@ def _read_firmware_build():
     return m.group(1) if m else None
 
 
-def _log_missing_kmod(codename, expected=None, mod='uhid'):
+def _log_missing_kmod(codename, expected=None, mod='uhid', optional=False):
     kindle = detect_kindle()
-    log.error(f"no bundled {mod}.ko for this Kindle; we need to build one")
+    say = log.warning if optional else log.error
+    if optional:
+        say(f"no bundled {mod}.ko for this Kindle; HID passthrough is unaffected")
+    else:
+        say(f"no bundled {mod}.ko for this Kindle; we need to build one")
     if expected:
-        log.error(f"  module needed : {expected}")
-    log.error(f"  model         : {kindle.model_name if kindle else 'unknown'}")
-    log.error(f"  codename      : {codename}")
-    log.error(f"  kernel        : {os.uname().release}")
-    log.error(f"  version.txt   : {_read_version_line() or 'unreadable'}")
-    log.error(f"  searched      : {', '.join(_module_search_dirs())}")
-    log.error("  ^ open an issue with these lines so we can compile the module")
+        say(f"  module needed : {expected}")
+    say(f"  model         : {kindle.model_name if kindle else 'unknown'}")
+    say(f"  codename      : {codename or 'unknown'}")
+    say(f"  kernel        : {os.uname().release}")
+    say(f"  version.txt   : {_read_version_line() or 'unreadable'}")
+    say(f"  searched      : {', '.join(_module_search_dirs())}")
+    if optional:
+        say("  ^ only needed to inject key events for external tools like "
+            "kindle-button-mapper; open an issue with these lines if you want it")
+    else:
+        say("  ^ open an issue with these lines so we can compile the module")
 
 
 def _create_dev_node(sysfs_dev, dev_path):
@@ -146,7 +154,7 @@ def ensure_uhid():
 
 
 def ensure_uinput():
-    """Best-effort /dev/uinput: stock module, then bundled .ko, else warn."""
+    """Best-effort /dev/uinput: stock module, then bundled .ko, else explain."""
     if os.path.exists('/dev/uinput'):
         return True
     # Device may ship uinput.ko itself (in /lib/modules) even if not built-in.
@@ -154,6 +162,7 @@ def ensure_uinput():
         return True
     codename = detect_codename()
     build = _read_firmware_build() if codename else None
+    expected = None
     if codename and build:
         kernel = os.uname().release
         expected = f"uinput-{kernel}-{build}-{codename}.ko"
@@ -165,8 +174,7 @@ def ensure_uinput():
                 _create_dev_node('/sys/class/misc/uinput/dev', '/dev/uinput')
             if os.path.exists('/dev/uinput'):
                 return True
-    log.warning("uinput unavailable; external tools (e.g. button-mapper) won't "
-                "work, HID passthrough is unaffected")
+    _log_missing_kmod(codename, expected, mod='uinput', optional=True)
     return False
 
 
