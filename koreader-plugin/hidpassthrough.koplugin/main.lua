@@ -1189,14 +1189,12 @@ function HIDPassthrough:onHIDPassthroughToggle()
     return true
 end
 
--- AutoSuspend stops re-arming powerd's t1 timeout when auto-suspend is off (#136).
+-- AutoSuspend is the only thing re-arming powerd's t1 timeout, and it can be off (#136).
 local T1_RESET_INTERVAL = 4 * 60
 local last_t1_reset = nil
 
 function HIDPassthrough:onInputEvent()
-    if not PowerD.resetT1Timeout then return end
-    local auto_suspend = G_reader_settings:readSetting("auto_suspend_timeout_seconds")
-    if auto_suspend == nil or auto_suspend > 0 or PluginShare.keepalive then return end
+    if not PowerD.resetT1Timeout or PluginShare.keepalive then return end
     if PowerD:isCharging() and not PowerD:isCharged() then return end
 
     local now = UIManager:getElapsedTimeSinceBoot()
