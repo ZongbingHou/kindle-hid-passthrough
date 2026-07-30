@@ -126,7 +126,9 @@ edit-devices:
 
 # Show pairing keys
 keys:
-    @ssh {{host}} "cat {{remote_dir}}/cache/pairing_keys.json 2>/dev/null | python3 -m json.tool || echo 'No pairing keys'"
+    @ssh {{host}} "[ -f {{remote_dir}}/cache/pairing_keys.json ] \
+        && {{python}} -m json.tool {{remote_dir}}/cache/pairing_keys.json \
+        || echo 'No pairing keys'"
 
 # Print a read-only diagnostics dump for bug reports
 diagnostics:
