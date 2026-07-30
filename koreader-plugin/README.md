@@ -30,7 +30,7 @@ Tap "Add a key…", press the key you want to bind, then pick an action for it. 
   <img src="screenshots/key-actions.png" width="48%" alt="Choosing an action">
 </p>
 
-The action list opens on a short block of common ones — next/previous page, frontlight, night mode, menu, table of contents, bookmarks, rotate, back — because the full list runs to seven pages and the everyday bindings shouldn't need a hunt. Everything else is underneath, grouped exactly as KOReader groups it for gestures and profiles: anything you can bind to a gesture you can bind to a key.
+The action list opens on a short block of common ones — next/previous page, close, frontlight, night mode, menu, table of contents, bookmarks, rotate, back — because the full list runs to seven pages and the everyday bindings shouldn't need a hunt. Everything else is underneath, grouped exactly as KOReader groups it for gestures and profiles: anything you can bind to a gesture you can bind to a key.
 
 To drop a mapping, hold its row in the list, or use "Remove this key" at the bottom of that key's action list.
 
