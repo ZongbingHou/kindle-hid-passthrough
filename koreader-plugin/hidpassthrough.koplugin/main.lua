@@ -175,16 +175,24 @@ local function getKeymapSettings()
     return keymap_settings
 end
 
+-- Declared above _attachInput, which fills it.
+local input_fds = {}
+
 -- KOReader drops EV_KEY events whose code isn't in event_map. Fill the gaps
 -- additively; re-applied on connect/disconnect since externalkeyboard swaps
 -- the whole map on attach and restores its snapshot on detach.
 function HIDPassthrough:_extendEventMap()
     local map = Device.input and Device.input.event_map
-    if not map then return end
+    if not map then
+        self._event_map_status = _("KOReader exposes no input event map")
+        return
+    end
 
-    local ok, extra = pcall(dofile, ffiutil.joinPath(self.path, "event_map_extra.lua"))
+    local path = ffiutil.joinPath(self.path, "event_map_extra.lua")
+    local ok, extra = pcall(dofile, path)
     if not ok or type(extra) ~= "table" then
         logger.warn("HIDPassthrough: could not load event_map_extra:", extra)
+        self._event_map_status = T(_("FAILED to load %1"), path)
         return
     end
 
@@ -195,20 +203,38 @@ function HIDPassthrough:_extendEventMap()
             added = added + 1
         end
     end
+    self._event_map_status = T(_("%1 extra key codes registered"), tostring(added))
     logger.dbg("HIDPassthrough: added", added, "extra key codes to the event map")
 end
 
 ------------------------------------------------------------------------------
--- Gamepad attach
+-- Key device attach
 ------------------------------------------------------------------------------
--- externalkeyboard only checks INPUT_KEYBOARD, so a gamepad (JOYSTICK to
--- FBInk) never gets opened. Buttons only, sticks and the hat are EV_ABS.
+-- externalkeyboard matches INPUT_KEYBOARD, which FBInk only sets when keycodes
+-- 1..31 are all present, so a remote or gamepad is opened by nobody.
 
-local joystick_fds = {}
+-- Lazy: the fbink_input cdef above is a pcall, so C.INPUT_* at module scope
+-- would take the plugin down when it isn't there.
+local exclude_types
+local function excludeTypes()
+    if not exclude_types then
+        exclude_types = bit.bor(
+            C.INPUT_KEYBOARD,
+            C.INPUT_TOUCHSCREEN,
+            C.INPUT_TABLET,
+            C.INPUT_SCALED_TABLET,
+            C.INPUT_ACCELEROMETER,
+            C.INPUT_ROTATION_EVENT,
+            C.INPUT_KINDLE_FRAME_TAP,
+            C.INPUT_POWER_BUTTON,
+            C.INPUT_SLEEP_COVER)
+    end
+    return exclude_types
+end
 
-local function checkJoystick(path)
+local function checkKeyDevice(path)
     local FBInkInput = ffi.loadlib("fbink_input", 1)
-    local dev = FBInkInput.fbink_input_check(path, C.INPUT_JOYSTICK, 0, 0)
+    local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEY, excludeTypes(), 0)
     local info
     if dev ~= nil then
         if dev.matched then
@@ -223,47 +249,121 @@ local function checkJoystick(path)
     return info
 end
 
-function HIDPassthrough:_attachJoystick(path, force)
-    if joystick_fds[path] and not force then return end
-    local info = checkJoystick(path)
+function HIDPassthrough:_attachInput(path, force)
+    if input_fds[path] and not force then return end
+    if Device.input.opened_devices[path] and not input_fds[path] then return end
+
+    local info = checkKeyDevice(path)
     if not info then return end
 
     -- uhid recreates the node on reconnect; a stale fd makes the input poll
     -- fail with ENODEV and then nothing reaches any plugin.
-    if joystick_fds[info.path] then
+    if input_fds[info.path] then
         pcall(Device.input.close, Device.input, info.path)
-        joystick_fds[info.path] = nil
+        input_fds[info.path] = nil
     end
 
-    joystick_fds[info.path] = Device.input:fdopen(info.fd, info.path, info.name)
-    logger.info("HIDPassthrough: attached gamepad", info.name, "@", info.path)
-    -- Bindings may have been registered before the pad showed up.
+    input_fds[info.path] = Device.input:fdopen(info.fd, info.path, info.name)
+    logger.info("HIDPassthrough: attached input", info.name, "@", info.path)
+    -- Bindings may have been registered before the device showed up.
     self:_extendEventMap()
     self:registerKeyEvents()
 end
 
-function HIDPassthrough:_detachJoystick(path)
-    if not joystick_fds[path] then return end
+function HIDPassthrough:_detachInput(path)
+    if not input_fds[path] then return end
     Device.input:close(path)
-    joystick_fds[path] = nil
-    logger.info("HIDPassthrough: detached gamepad", path)
+    input_fds[path] = nil
+    logger.info("HIDPassthrough: detached input", path)
 end
 
-function HIDPassthrough:_scanJoysticks()
+function HIDPassthrough:_scanInputs()
     for name in lfs.dir("/dev/input") do
         if name:match("^event%d+$") then
-            self:_attachJoystick("/dev/input/" .. name)
+            self:_attachInput("/dev/input/" .. name)
         end
     end
 end
 
--- An insert is always a new device, so force the re-open.
+local type_names
+local function typeNames()
+    if not type_names then
+        type_names = {
+            { C.INPUT_POINTINGSTICK, "pointingstick" },
+            { C.INPUT_MOUSE, "mouse" },
+            { C.INPUT_TOUCHPAD, "touchpad" },
+            { C.INPUT_TOUCHSCREEN, "touchscreen" },
+            { C.INPUT_JOYSTICK, "joystick" },
+            { C.INPUT_TABLET, "tablet" },
+            { C.INPUT_KEY, "key" },
+            { C.INPUT_KEYBOARD, "keyboard" },
+            { C.INPUT_ACCELEROMETER, "accelerometer" },
+            { C.INPUT_DPAD, "dpad" },
+            { C.INPUT_VOLUME_BUTTONS, "volume" },
+        }
+    end
+    return type_names
+end
+
+local function describeInput(path)
+    local FBInkInput = ffi.loadlib("fbink_input", 1)
+    local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEY, 0, C.SCAN_ONLY)
+    if dev == nil then return nil end
+    local name, dtype = ffi.string(dev.name), dev.type
+    C.free(dev)
+
+    local types = {}
+    for dummy, pair in ipairs(typeNames()) do -- luacheck: ignore dummy
+        if bit.band(dtype, pair[1]) ~= 0 then table.insert(types, pair[2]) end
+    end
+    return name, #types > 0 and table.concat(types, ",") or "unknown"
+end
+
+function HIDPassthrough:showInputDiagnostics()
+    local lines = {
+        T(_("Extra event map: %1"), self._event_map_status or _("not loaded")),
+        T(_("Plugin directory: %1"), tostring(self.path)),
+        "",
+        _("Input devices:"),
+    }
+
+    local paths = {}
+    for name in lfs.dir("/dev/input") do
+        if name:match("^event%d+$") then
+            table.insert(paths, "/dev/input/" .. name)
+        end
+    end
+    table.sort(paths)
+
+    for dummy, path in ipairs(paths) do -- luacheck: ignore dummy
+        local name, types = describeInput(path)
+        local owner
+        if input_fds[path] then
+            owner = _("open (this plugin)")
+        elseif Device.input.opened_devices[path] then
+            owner = _("open (KOReader)")
+        else
+            owner = _("NOT OPEN - keys are ignored")
+        end
+        table.insert(lines, T("%1  %2\n    [%3]  %4",
+            path, name or "?", types or "?", owner))
+    end
+
+    UIManager:show(TextViewer:new{
+        title = _("Input diagnostics"),
+        text = table.concat(lines, "\n"),
+        justified = false,
+    })
+end
+
+-- An insert is always a new device, so force the re-open. One second, not
+-- externalkeyboard's half, so a real keyboard reaches it first.
 function HIDPassthrough:onEvdevInputInsert(path)
-    UIManager:scheduleIn(0.5, function() self:_attachJoystick(path, true) end)
+    UIManager:scheduleIn(1, function() self:_attachInput(path, true) end)
 end
 
 function HIDPassthrough:onEvdevInputRemove(path)
-    UIManager:scheduleIn(0.5, function() self:_detachJoystick(path) end)
+    UIManager:scheduleIn(1, function() self:_detachInput(path) end)
 end
 
 function HIDPassthrough:registerKeyEvents()
@@ -290,7 +390,7 @@ end
 -- Overrides InputContainer's handler, which drops key_events outright.
 function HIDPassthrough:onPhysicalKeyboardDisconnected()
     self:_extendEventMap()
-    if Device:hasKeys() then
+    if Device:hasKeys() or next(input_fds) ~= nil then
         self:registerKeyEvents()
     else
         self.key_events = {}
@@ -1216,8 +1316,8 @@ function HIDPassthrough:init()
         table.insert(self.ui.active_widgets, self)
     end
     UIManager.event_hook:registerWidget("InputEvent", self)
-    -- A pad may already be connected.
-    self:_scanJoysticks()
+    -- A device may already be connected.
+    self:_scanInputs()
 end
 
 function HIDPassthrough:onCloseWidget()
@@ -1288,6 +1388,11 @@ function HIDPassthrough:addToMainMenu(menu_items)
                         text = _("Recent logs"),
                         keep_menu_open = true,
                         callback = function() self:showLogs() end,
+                    },
+                    {
+                        text = _("Input diagnostics"),
+                        keep_menu_open = true,
+                        callback = function() self:showInputDiagnostics() end,
                     },
                     {
                         text = _("Clear descriptor cache"),
