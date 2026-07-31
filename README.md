@@ -57,21 +57,32 @@ Install directly from [KindleForge](https://github.com/KindleTweaks/KindleForge)
 
 ### Manual install
 
-1. Download the latest release from [GitHub Releases](https://github.com/zampierilucas/kindle-hid-passthrough/releases):
+1. Download the latest release from [GitHub Releases](https://github.com/zampierilucas/kindle-hid-passthrough/releases) and unpack it somewhere other than the install directory:
    ```bash
    wget https://github.com/zampierilucas/kindle-hid-passthrough/releases/latest/download/kindle-hid-passthrough-armv7.tar.gz
-   tar -xzf kindle-hid-passthrough-armv7.tar.gz -C /mnt/us/kindle_hid_passthrough/
+   mkdir -p /mnt/us/khp-release
+   tar -xzf kindle-hid-passthrough-armv7.tar.gz -C /mnt/us/khp-release
    ```
 
    The release contains a `dist/` directory with a bundled Python runtime and all dependencies — no Python installation required on the Kindle.
 
 2. Run the interactive installer:
    ```bash
-   cd /mnt/us/kindle_hid_passthrough
-   sh scripts/install.sh
+   sh /mnt/us/khp-release/scripts/install.sh
    ```
 
    This lets you pair devices, install udev rules, set up autostart, install the BTManager app, and set keyboard layouts.
+
+### Updating
+
+Same two steps, option 1 handles both cases. It notices an existing install, stops the daemon, replaces the program files and leaves your `config.ini`, paired devices and pairing keys alone. A new default config is written to `config.ini.new` so you can diff it against yours. There is no need to uninstall first.
+
+Non-interactive, for scripts:
+```bash
+sh /mnt/us/khp-release/scripts/install.sh update
+```
+
+Unpacking to a staging directory is preferred because it lets the installer replace the program files wholesale, so anything dropped between releases goes with them. If you unpack straight over `/mnt/us/kindle_hid_passthrough` instead, stop the daemon first with `stop hid-passthrough`. A running daemon holds `dist/ld-linux-armhf.so.3` open, tar stops at that file, and the update is left half applied.
 
 ### BTManager
 

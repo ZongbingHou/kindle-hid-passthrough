@@ -31,12 +31,11 @@ alert() {
 install_waf() {
     log_msg "Installing BTManager WAF"
 
-    # Register in appreg.db if not already registered
+    # Rewritten every launch so an update that moves the app or changes the
+    # command line takes effect without a reinstall.
     if [ -f "$APPREG_DB" ]; then
-        existing=$(sqlite3 "$APPREG_DB" "SELECT handlerId FROM handlerIds WHERE handlerId='$APP_ID';" 2>/dev/null)
-        if [ -z "$existing" ]; then
-            log_msg "Registering $APP_ID in appreg.db"
-            sqlite3 "$APPREG_DB" <<EOF
+        log_msg "Registering $APP_ID in appreg.db"
+        sqlite3 "$APPREG_DB" <<EOF
 INSERT OR IGNORE INTO interfaces (interface) VALUES ('application');
 INSERT OR IGNORE INTO handlerIds (handlerId) VALUES ('$APP_ID');
 INSERT OR IGNORE INTO associations (handlerId, interface, contentId, defaultAssoc)
@@ -48,10 +47,7 @@ INSERT OR REPLACE INTO properties (handlerId, name, value)
 INSERT OR REPLACE INTO properties (handlerId, name, value)
     VALUES ('$APP_ID', 'supportedOrientation', 'U');
 EOF
-            log_msg "Registration complete"
-        else
-            log_msg "$APP_ID already registered"
-        fi
+        log_msg "Registration complete"
     fi
 }
 

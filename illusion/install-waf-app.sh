@@ -50,9 +50,9 @@ echo "   Done"
 
 echo "3. Registering app..."
 if [ -f "$APPREG_DB" ]; then
-    existing=$(sqlite3 "$APPREG_DB" "SELECT handlerId FROM handlerIds WHERE handlerId='$APP_ID';" 2>/dev/null)
-    if [ -z "$existing" ]; then
-        sqlite3 "$APPREG_DB" <<EOF
+    # Rewritten every time, an existing registration can still be pointing at a
+    # stale command or app path after an update.
+    sqlite3 "$APPREG_DB" <<EOF
 INSERT OR IGNORE INTO interfaces (interface) VALUES ('application');
 INSERT OR IGNORE INTO handlerIds (handlerId) VALUES ('$APP_ID');
 INSERT OR IGNORE INTO associations (handlerId, interface, contentId, defaultAssoc)
@@ -64,10 +64,7 @@ INSERT OR REPLACE INTO properties (handlerId, name, value)
 INSERT OR REPLACE INTO properties (handlerId, name, value)
     VALUES ('$APP_ID', 'supportedOrientation', 'U');
 EOF
-        echo "   Registered $APP_ID in appreg.db"
-    else
-        echo "   Already registered"
-    fi
+    echo "   Registered $APP_ID in appreg.db"
 else
     echo "   WARNING: appreg.db not found at $APPREG_DB"
 fi
@@ -83,11 +80,17 @@ echo "   Installed to $SCRIPTLET_DEST"
 
 echo "5. Starting daemon..."
 # Stop existing instances
+/sbin/stop hid-passthrough 2>/dev/null
 pkill -f "ld-linux-armhf." 2>/dev/null
 sleep 1
-"$BINARY" --daemon >/dev/null 2>&1 &
-sleep 1
-echo "   Daemon started"
+if [ -f /etc/upstart/hid-passthrough.conf ] && \
+   /sbin/start hid-passthrough >/dev/null 2>&1; then
+    echo "   Daemon started via upstart"
+else
+    "$BINARY" --daemon >/dev/null 2>&1 &
+    sleep 1
+    echo "   Daemon started"
+fi
 
 echo ""
 echo "=== Installation Complete ==="
