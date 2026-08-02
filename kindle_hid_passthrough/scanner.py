@@ -59,6 +59,8 @@ class Scanner:
             except Exception:
                 pass
             self.transport = None
+            from bt_setup import chip
+            chip().on_transport_close()
         self.device = None
 
     async def scan(

@@ -458,6 +458,8 @@ class HIDHost(ClassicMixin, BLEMixin):
             except Exception:
                 pass
             self.transport = None
+            from bt_setup import chip
+            chip().on_transport_close()
 
     def get_auth_failure_address(self) -> str:
         """Get address that had auth failure, if any."""

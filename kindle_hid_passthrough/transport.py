@@ -3,15 +3,63 @@
 
 import asyncio
 import os
+import termios
 
 from bumble.device import Device
 from bumble.hci import HCI_LE_ADD_DEVICE_TO_RESOLVING_LIST_COMMAND, LeFeatureMask
 from bumble.transport import open_transport
 
 from config import config
+from hci_parser import install_resync_parser
 from logging_utils import log
 
 __all__ = ['create_bumble_device']
+
+
+def _tty_fd(transport, device_path):
+    """The open tty fd behind this transport, whichever scheme opened it."""
+    try:
+        fd = transport.sink.transport.serial.fileno()
+        if os.isatty(fd):
+            return fd
+    except (AttributeError, OSError):
+        pass
+    # file: transports (the probe fallback) hand us no serial object, so find
+    # our own fd for the device instead.
+    if not device_path:
+        return None
+    try:
+        for entry in os.listdir('/proc/self/fd'):
+            try:
+                if os.readlink(f'/proc/self/fd/{entry}') != device_path:
+                    continue
+                fd = int(entry)
+                if os.isatty(fd):
+                    return fd
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
+    return None
+
+
+def _apply_hci_termios(transport, device_path):
+    """Ignore breaks on the HCI UART.
+
+    pyserial clears IGNBRK on every open, so a line break arrives as a literal
+    0x00 in the HCI stream and desyncs the parser (issue #120).
+    """
+    fd = _tty_fd(transport, device_path)
+    if fd is None:
+        return
+    try:
+        attrs = termios.tcgetattr(fd)
+        attrs[0] |= termios.IGNBRK
+        attrs[0] &= ~(termios.BRKINT | termios.PARMRK | termios.INPCK
+                      | termios.ISTRIP)
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except termios.error as e:
+        log.warning(f"Could not set HCI termios flags: {e}")
 
 
 def _release_leaked_fds(device_path: str) -> int:
@@ -78,6 +126,14 @@ async def create_bumble_device(transport_spec=None, configure=None):
         log.error(f"Transport open timed out after {config.transport_timeout}s")
         raise
 
+    # UART HCI drops bytes when the SoC wakes from deep idle, so the parser has
+    # to resync rather than trust a corrupt header (issue #120). Keyed off the
+    # chip, not the spec: an undetected Kindle falls back to a file: spec for
+    # the same UART.
+    if chip().uart_hci:
+        install_resync_parser(transport)
+        _apply_hci_termios(transport, chip().kindle.device_path)
+
     # chip hook: runs after the transport opens, before the first HCI command
     chip().on_transport_open()
 
@@ -117,6 +173,7 @@ async def create_bumble_device(transport_spec=None, configure=None):
             await transport.close()
         except Exception:
             pass
+        chip().on_transport_close()
         raise
 
     return transport, device
