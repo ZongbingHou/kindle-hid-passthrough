@@ -92,6 +92,12 @@ sh /mnt/us/kindle_hid_passthrough/illusion/install-waf-app.sh
 
 udev rules are not installed. Install them (see above) so the system recognizes the device as a keyboard.
 
+### BTManager doesn't show up on the home screen
+
+BTManager is launched by a scriptlet, and scriptlets need the [Hotfix](https://github.com/KindleModding/Hotfix/releases/tag/v2.3.7) package. Kindles jailbroken with older methods don't support them at all, so the app installs fine and then never appears. Install the hotfix as an mrpi package and the entry shows up.
+
+Everything else works without it — start the daemon over SSH or from the KOReader plugin and page turns behave normally.
+
 ### Daemon won't start
 
 Check if the Bluetooth module is loaded:
