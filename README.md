@@ -99,6 +99,8 @@ Paired list, scanning for nearby BLE and Classic HID devices, and the per-device
 
 Installed automatically via KindleForge. For manual installs, use option 6 in `scripts/install.sh`.
 
+The **Start on boot** toggle at the bottom installs or removes the upstart job. It is off by default, so the daemon only runs while you use it, which leaves the Bluetooth radio free for audio. Turn it on if you want your keyboard connected right after a reboot.
+
 ### KOReader plugin
 
 If you use KOReader, a bundled plugin gives you the same scan / pair / connect / disconnect / logs / cache controls from inside KOReader — no need to exit. Open via **cog icon (Settings) → Network → BT Manager - HID Passthrough**.

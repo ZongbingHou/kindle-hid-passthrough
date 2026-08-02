@@ -11,6 +11,7 @@ Port 8321 on localhost.
 import json
 import os
 import socket
+import subprocess
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
@@ -20,6 +21,7 @@ from config import Protocol, config, get_version, normalize_addr
 __all__ = ['APIServer', 'RequestHandler', 'PORT']
 
 PORT = 8321
+UPSTART_CONF = '/etc/upstart/hid-passthrough.conf'
 
 
 class APIServer(ThreadingMixIn, HTTPServer):
@@ -78,6 +80,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._handle_remove(param('addr'))
             case '/clear-cache':
                 self._handle_clear_cache()
+            case '/autostart':
+                self._handle_autostart(param('enable'))
             case '/scan':
                 self._handle_scan()
             case '/scan-status':
@@ -104,7 +108,30 @@ class RequestHandler(BaseHTTPRequestHandler):
         status = self._controller.get_status()
         status["ok"] = True
         status["version"] = get_version()
+        status["autostart"] = os.path.exists(UPSTART_CONF)
         self._send_json(status)
+
+    def _handle_autostart(self, enable):
+        if enable is None:
+            self._send_json({"ok": True, "enabled": os.path.exists(UPSTART_CONF)})
+            return
+
+        want = enable not in ('0', 'false', 'off')
+        script = os.path.join(config.base_path, 'scripts', 'install.sh')
+        action = 'installUpstart' if want else 'removeUpstart'
+        try:
+            result = subprocess.run(['/bin/sh', script, action],
+                                    capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            self._send_json({"ok": False, "error": str(e)})
+            return
+
+        enabled = os.path.exists(UPSTART_CONF)
+        if enabled == want:
+            self._send_json({"ok": True, "enabled": enabled})
+        else:
+            err = (result.stderr or result.stdout or 'failed').strip()
+            self._send_json({"ok": False, "enabled": enabled, "error": err[-200:]})
 
     def _handle_start(self):
         controller = self._controller

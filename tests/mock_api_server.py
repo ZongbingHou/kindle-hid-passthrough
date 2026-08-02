@@ -31,6 +31,7 @@ state = {
     "connected_protocol": None,
     "connected_name": None,
     "hid_ready": True,
+    "autostart": False,
     "version": "3.0.0",
     "scan_results": [
         {"address": "AA:BB:CC:DD:EE:01", "name": "BT Keyboard", "protocol": "classic", "rssi": -45},
@@ -62,6 +63,7 @@ class MockHandler(SimpleHTTPRequestHandler):
                 "version": state["version"],
                 "scanning": state["scanning"],
                 "pairing": state["pairing"],
+                "autostart": state["autostart"],
             }
             if state["connected_device"]:
                 resp["connected_device"] = state["connected_device"]
@@ -148,6 +150,12 @@ class MockHandler(SimpleHTTPRequestHandler):
                 "2026-03-01 12:00:02 INFO ble_hid: API server listening on port 8321",
                 "2026-03-01 12:00:03 INFO daemon: Waiting for connection...",
             ]})
+
+        elif self.path.startswith("/autostart"):
+            enable = _parse_param(self.path, "enable")
+            if enable is not None:
+                state["autostart"] = enable not in ("0", "false", "off")
+            self._json({"ok": True, "enabled": state["autostart"]})
 
         elif self.path == "/clear-cache":
             self._json({"ok": True, "message": "Cache cleared"})
