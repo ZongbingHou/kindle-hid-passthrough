@@ -27,7 +27,8 @@ deploy:
         --transform='s|^kindle_hid_passthrough/hid-passthrough-dev.upstart|etc/upstart/hid-passthrough.conf|' \
         --transform='s|^kindle_hid_passthrough/|mnt/us/kindle_hid_passthrough/|' \
         --transform='s|^assets/99-hid-keyboard.rules|etc/udev/rules.d/99-hid-keyboard.rules|' \
-        --transform='s|^scripts/dev_is_keyboard.sh|mnt/us/kindle_hid_passthrough/scripts/dev_is_keyboard.sh|' \
+        --transform='s|^assets/|mnt/us/kindle_hid_passthrough/assets/|' \
+        --transform='s|^scripts/|mnt/us/kindle_hid_passthrough/scripts/|' \
         --transform='s|^illusion/BTManager/|mnt/us/kindle_hid_passthrough/illusion/BTManager/|' \
         --transform='s|^illusion/BTManager.sh|mnt/us/kindle_hid_passthrough/illusion/BTManager.sh|' \
         kindle_hid_passthrough/*.py \
@@ -36,7 +37,9 @@ deploy:
         kindle_hid_passthrough/hid-passthrough-dev.upstart \
         kindle_hid_passthrough/modules/*.ko \
         assets/99-hid-keyboard.rules \
+        assets/hid-passthrough.upstart \
         scripts/dev_is_keyboard.sh \
+        scripts/install.sh \
         illusion/BTManager/* \
         illusion/BTManager.sh \
     ) | ssh {{host}} "tar xf - -C /"

@@ -27,6 +27,7 @@ var BTManager = (function() {
     var logsVisible = false;
     var pairLogTimer = null;
     var btOn = false;
+    var autostartOn = false;
     var scanResultCount = 0;
 
     // Currently viewed device in detail overlay
@@ -197,6 +198,31 @@ var BTManager = (function() {
         }
     }
 
+    // ---- Autostart ----
+
+    function setAutostartUI(on) {
+        autostartOn = on;
+        getEl("btnAutostart").className = on ? "toggle on" : "toggle";
+    }
+
+    function toggleAutostart() {
+        var want = autostartOn ? "0" : "1";
+        showMessage(autostartOn ? "Disabling autostart..." : "Enabling autostart...", false);
+        request("/autostart?enable=" + want, function(data, err) {
+            if (err) {
+                showMessage("Error: " + err, true);
+                return;
+            }
+            setAutostartUI(!!(data && data.enabled));
+            if (data && data.ok) {
+                showMessage(data.enabled ? "Starts on boot" : "Won't start on boot", false);
+            } else {
+                showMessage(data && data.error ? data.error : "Failed", true);
+            }
+            lastStatusJson = "";
+        });
+    }
+
     // ---- Status Polling ----
 
     function updateStatus() {
@@ -222,6 +248,8 @@ var BTManager = (function() {
             if (data.version) {
                 getEl("footerVersion").innerHTML = "v" + escapeHtml(data.version);
             }
+
+            setAutostartUI(!!data.autostart);
 
             lastStatus = data;
 
@@ -716,6 +744,7 @@ var BTManager = (function() {
 
     function bindEvents() {
         bindBtn("btnToggle", toggleBluetooth);
+        bindBtn("btnAutostart", toggleAutostart);
         bindBtn("btnScan", toggleScan);
         bindBtn("footerDebug", showLogs);
         bindBtn("btnDetailClose", hideDeviceDetail);

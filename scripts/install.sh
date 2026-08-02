@@ -148,7 +148,10 @@ installAll()
     return 1
   fi
   installUdevRules
-  installUpstart
+  # Auto-start is opt-in, only refresh a job the user already enabled.
+  if [ -f /etc/upstart/hid-passthrough.conf ]; then
+    installUpstart
+  fi
   installWAFApp
   if ! installKOReaderPlugin; then
     startDaemon
@@ -179,6 +182,16 @@ installUpstart()
   /usr/sbin/mntroot ro
   # upstart only picks up a newly dropped .conf after a config reload, without
   # this the job stays unknown and the start below fails until a reboot.
+  /sbin/initctl reload-configuration 2>/dev/null || true
+  echo " -> Ready."
+}
+
+removeUpstart()
+{
+  echo " -> Removing upstart service"
+  /usr/sbin/mntroot rw
+  rm -f /etc/upstart/hid-passthrough.conf
+  /usr/sbin/mntroot ro
   /sbin/initctl reload-configuration 2>/dev/null || true
   echo " -> Ready."
 }
@@ -307,7 +320,8 @@ print_menu()
   printf " 6) Install BTManager app\n"
   printf " 7) Install KOReader plugin\n"
   printf " 8) Uninstall everything\n"
-  printf " 9) Quit\n"
+  printf " 9) Disable auto-start on boot (remove upstart)\n"
+  printf "10) Quit\n"
 }
 
 # Non-interactive entry point: `sh install.sh <action>` runs one action and exits.
@@ -316,6 +330,7 @@ if [ $# -gt 0 ]; then
     installAll|update)  installAll; exit $? ;;
     installUdevRules)   installUdevRules; exit $? ;;
     installUpstart)     installUpstart; exit $? ;;
+    removeUpstart)      removeUpstart; exit $? ;;
     installMainFiles)   installMainFiles; exit $? ;;
     installWAFApp)      installWAFApp; exit $? ;;
     installKOReaderPlugin) installKOReaderPlugin; exit $? ;;
@@ -326,7 +341,7 @@ fi
 
 while :; do
   print_menu
-  printf "Enter choice [1-9]: "
+  printf "Enter choice [1-10]: "
   read choice
   case "$choice" in
     1)
@@ -354,6 +369,9 @@ while :; do
       uninstallAll
       ;;
     9)
+      removeUpstart
+      ;;
+    10)
       echo "Exiting."
       break
       ;;
