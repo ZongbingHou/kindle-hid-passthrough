@@ -11,7 +11,7 @@ from bumble.hci import HCI_LE_SET_PRIVACY_MODE_COMMAND, HCI_LE_Set_Privacy_Mode_
 from ble import BLEMixin
 from bt_setup import ensure_uhid
 from classic import ClassicMixin
-from config import Protocol, config, get_version, normalize_addr
+from config import Protocol, clean_device_name, config, get_version, normalize_addr
 from device_cache import DeviceCache
 from logging_utils import log
 from pairing import create_keystore, create_pairing_config
@@ -351,7 +351,7 @@ class HIDHost(ClassicMixin, BLEMixin):
         cache = self.device_cache.load(address)
         if cache and 'report_map' in cache:
             self.report_map = bytes.fromhex(cache['report_map'])
-            self.device_name = cache.get('device_name')
+            self.device_name = clean_device_name(cache.get('device_name') or '') or None
             log.success(f"Loaded cached descriptor ({len(self.report_map)} bytes)")
             return True
         return False

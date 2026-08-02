@@ -1,32 +1,24 @@
 --[[--
-HID Passthrough daemon manager.
-
-Adds a "HID Passthrough" entry to Settings → Network that lets the user
-start, stop, and check the status of the kindle-hid-passthrough daemon
-(https://github.com/zampierilucas/kindle-hid-passthrough) without leaving
-KOReader.
-
-The daemon exposes a small HTTP API on http://localhost:8321 (the same one
-used by the BTManager WAF app). When it's running, we use that API for
-status and to stop it. When it's not running, the API is unreachable, so
-starting is done by spawning the binary directly with `--daemon`.
+Manage the kindle-hid-passthrough daemon and map keys from inside KOReader.
 
 @module koplugin.hidpassthrough
 --]]
 
 local ConfirmBox = require("ui/widget/confirmbox")
+local DataStorage = require("datastorage")
 local Device = require("device")
 local Dispatcher = require("dispatcher")
-local Event = require("ui/event")
 local InfoMessage = require("ui/widget/infomessage")
-local InputText = require("ui/widget/inputtext")
+local InputContainer = require("ui/widget/container/inputcontainer")
+local LuaSettings = require("luasettings")
 local Menu = require("ui/widget/menu")
+local PluginShare = require("pluginshare")
+local PowerD = Device:getPowerDevice()
 local Screen = require("device").screen
 local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
-local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
+local time = require("ui/time")
 local rapidjson = require("rapidjson")
 local util = require("util")
 local ffiutil = require("ffi/util")
@@ -37,18 +29,18 @@ local socket = require("socket")
 local http = require("socket.http")
 local ltn12 = require("ltn12")
 
+local lfs = require("libs/libkoreader-lfs")
 local ffi = require("ffi")
 local C = ffi.C
 local bit = require("bit")
 pcall(require, "ffi/posix_h")
 pcall(require, "ffi/fbink_input_h")
 
-local HIDPassthrough = WidgetContainer:extend{
+local HIDPassthrough = InputContainer:extend{
     name = "hidpassthrough",
     is_doc_only = false,
 
-    -- Defaults matching the upstream project layout. Override in
-    -- settings/hidpassthrough.lua if your install lives elsewhere.
+    -- Override in settings/hidpassthrough.lua if your install differs.
     DAEMON_BINARY = "/mnt/us/kindle_hid_passthrough/kindle-hid-passthrough",
     API_HOST      = "127.0.0.1",
     API_PORT      = 8321,
@@ -59,15 +51,12 @@ local HIDPassthrough = WidgetContainer:extend{
 -- HTTP helper
 ------------------------------------------------------------------------------
 
--- Tiny GET that returns the response body or (nil, err). We don't pull in a
--- JSON parser; we just look for substrings, since the daemon's responses are
--- short and well-known.
+-- Returns the response body or (nil, err).
 function HIDPassthrough:_httpGet(path)
     local url = string.format("http://%s:%d%s", self.API_HOST, self.API_PORT, path)
     local body_chunks = {}
 
-    -- Per-request timeout. socket.http.TIMEOUT is module-global, so save
-    -- and restore it to avoid bleeding into the rest of KOReader.
+    -- socket.http.TIMEOUT is module-global, so save and restore it.
     local saved_timeout = http.TIMEOUT
     http.TIMEOUT = self.API_TIMEOUT
 
@@ -103,29 +92,9 @@ end
 ------------------------------------------------------------------------------
 -- Daemon state
 ------------------------------------------------------------------------------
---
--- kindle-hid-passthrough is two-tier:
---
---   * An always-on HTTP API server (port 8321) that survives between HID
---     sessions and reports status / accepts /start and /stop commands.
---   * The actual HID daemon, which the API server starts and stops on
---     demand. Its state is reported in `daemon_running` from /status.
---
--- Spawning the binary directly (`kindle-hid-passthrough --daemon`) starts
--- *both* layers in one go.
---
--- That gives us three states:
---
---   "off"        — API server not reachable. Nothing is running. To turn on,
---                  spawn the binary; this brings up both layers.
---   "api_only"   — API server up, HID daemon off. To turn on, POST /start.
---   "on"         — Both layers running. To turn off, POST /stop (leaves the
---                  API server alive, matching what BTManager does).
---
--- The user-facing checkmark is true only for "on".
+-- "off" = API server down, "api_only" = server up but daemon stopped,
+-- "on" = both. Spawning the binary brings up both layers.
 
--- How long to wait for the daemon to come up before giving up. The bundled
--- Python interpreter + bumble import can easily take 5-10s on first start.
 HIDPassthrough.START_TIMEOUT = 15
 HIDPassthrough.STOP_TIMEOUT = 5
 
@@ -147,316 +116,457 @@ function HIDPassthrough:isRunning()
 end
 
 ------------------------------------------------------------------------------
--- Keyboard wiring
+-- Key mappings
 ------------------------------------------------------------------------------
--- TODO: Remove uevent handling once koreader/koreader-base#2327 and
--- koreader/koreader#15248 are merged upstream. Once those land, KOReader
--- will natively support uevent-based keyboard hot-plug on Kindle and
--- the polling logic below becomes unnecessary.
---
--- The hard part. Background: KOReader's input layer on Kindle reads from a
--- hardcoded list of /dev/input/event* devices opened at startup. The HID
--- daemon creates a uhid device only when a BLE keyboard actually connects,
--- which can happen long after the daemon started. KOReader's bundled
--- externalkeyboard.koplugin handles exactly this kind of situation, but it
--- self-disables on Kindle (it gates on Kobo USB-OTG sysfs paths and won't
--- even register otherwise — see plugins/externalkeyboard.koplugin/main.lua,
--- the early `return { disabled = true }` block).
---
--- We borrow upstream's actual mechanism — which works regardless of the
--- USB-OTG gating — and apply it from this plugin instead:
---
---   1. Use FBInkInput's fbink_input_check() to ask the kernel "is this path
---      a keyboard?". It returns an already-opened fd if yes.
---   2. Hand that fd to Device.input:fdopen(fd, path, name) — the three-arg
---      form that registers a pre-opened fd. (NOT Input:open(path), which
---      doesn't work for hot-added devices on Kindle: the C backend ends up
---      with a stale entry that fails the next epoll wait with ENODEV. We
---      learned that the hard way.)
---   3. Merge upstream's event_map_keyboard.lua into Device.input.event_map
---      and flip Device.hasKeyboard / hasKeys / hasDPad to truthy stubs, so
---      KOReader treats the new device as a real keyboard (event lookup,
---      input dialogs, focus, etc.). Without this, key codes from the new
---      fd would be silently dropped because the device's event_map has no
---      entries for QWERTY scancodes.
---   4. On removal, undo all of the above.
---
--- Since we can't subscribe to kernel uevents on Kindle the way the upstream
--- plugin does on Kobo, we poll. The polling is cheap: a few ioctls and a
--- directory listing every few seconds, only while the daemon is "on".
+-- Not built on hotkeys.koplugin: it returns disabled unless hasScreenKB or
+-- hasKeyboard, which no modern Kindle sets, and PluginLoader caches that.
 
-HIDPassthrough.WATCHER_INTERVAL = 3 -- seconds
+local MODIFIER_KEYS = {
+    Shift = true, Ctrl = true, Alt = true, Meta = true, Sym = true,
+    ScreenKB = true, LCtrl = true, LAlt = true, RAlt = true, LMeta = true,
+    RMeta = true, CapsLock = true,
+}
 
--- Try to load the FBInkInput library. It's part of koreader-base on Kobo
--- and Kindle, but we still wrap it in pcall so the plugin degrades cleanly
--- on platforms where it isn't available — the start/stop UI keeps working.
-local FBInkInput
-do
-    local ok, lib = pcall(function()
-        return ffi.loadlib("fbink_input", 1)
-    end)
-    if ok then
-        FBInkInput = lib
-    else
-        logger.warn("HIDPassthrough: fbink_input not available, keyboard "
-            .. "auto-attach disabled:", tostring(lib))
+-- Fixed order so a given combo always serializes to the same id.
+local MOD_ORDER = { "Shift", "Ctrl", "Alt", "Meta", "Sym", "ScreenKB" }
+
+-- Shortcuts, so the common bindings don't mean paging through the full tree.
+-- By Dispatcher key, never by title, so renames and translations come free.
+local COMMON_ACTIONS = {
+    "hidpassthrough_next_page",
+    "hidpassthrough_prev_page",
+    "hidpassthrough_close",
+    "toggle_frontlight",
+    "night_mode",
+    "show_menu",
+    "toc",
+    "bookmarks",
+    "toggle_bookmark",
+    "iterate_rotation",
+    "back",
+}
+
+-- "F13", "Shift+F13". Reads modifiers off the Key hash, not key.modifiers,
+-- which is a live reference to Input's table rather than a snapshot.
+local function keyToId(key)
+    local parts = {}
+    for dummy, mod in ipairs(MOD_ORDER) do -- luacheck: ignore dummy
+        if key[mod] then table.insert(parts, mod) end
     end
+    table.insert(parts, key.key)
+    return table.concat(parts, "+")
 end
 
--- NO_RECAP silences fbink_input_check's per-device log line. Absent on older
--- koreader-base builds, so resolve defensively.
-local INPUT_SCAN_FLAGS = 0
-do
-    local ok, flag = pcall(function() return C.NO_RECAP end)
-    if ok and flag then INPUT_SCAN_FLAGS = flag end
+local function idToSequence(id)
+    local seq = {}
+    for part in id:gmatch("[^+]+") do table.insert(seq, part) end
+    return seq
 end
 
--- Stub functions used to flip Device.has* properties on/off.
-local function yes() return true end
-local function no()  return false end
+-- Shared across the FileManager and ReaderUI plugin instances.
+local keymap_path = ffiutil.joinPath(DataStorage:getSettingsDir(),
+    "hidpassthrough_keymap.lua")
+local keymap_settings
 
--- Module-level so attachments survive FileManager <-> ReaderUI re-instantiation.
-local kb_attached = {}
-local kb_count = 0
-local kb_original_caps = nil
+local function getKeymapSettings()
+    if not keymap_settings then
+        keymap_settings = LuaSettings:open(keymap_path)
+    end
+    return keymap_settings
+end
 
--- Pull in the upstream keyboard event_map. Prefer the upstream copy (so we
--- get any improvements automatically); fall back to our bundled copy if it
--- isn't there.
-function HIDPassthrough:_loadKeyboardEventMap()
-    local upstream = "plugins/externalkeyboard.koplugin/event_map_keyboard.lua"
-    local f = io.open(upstream, "r")
-    if f then
-        f:close()
-        local ok, map = pcall(dofile, upstream)
-        if ok and type(map) == "table" then
-            return map
+-- Declared above _attachInput, which fills it.
+local input_fds = {}
+
+-- KOReader drops EV_KEY events whose code isn't in event_map. Fill the gaps
+-- additively; re-applied on connect/disconnect since externalkeyboard swaps
+-- the whole map on attach and restores its snapshot on detach.
+function HIDPassthrough:_extendEventMap()
+    local map = Device.input and Device.input.event_map
+    if not map then
+        self._event_map_status = _("KOReader exposes no input event map")
+        return
+    end
+
+    local path = ffiutil.joinPath(self.path, "event_map_extra.lua")
+    local ok, extra = pcall(dofile, path)
+    if not ok or type(extra) ~= "table" then
+        logger.warn("HIDPassthrough: could not load event_map_extra:", extra)
+        self._event_map_status = T(_("FAILED to load %1"), path)
+        return
+    end
+
+    local added = 0
+    for code, name in pairs(extra) do
+        if map[code] == nil then
+            map[code] = name
+            added = added + 1
         end
-        logger.warn("HIDPassthrough: failed to dofile upstream event_map:", map)
     end
-    local bundled = "plugins/hidpassthrough.koplugin/event_map_keyboard.lua"
-    local ok, map = pcall(dofile, bundled)
-    if ok and type(map) == "table" then
-        return map
+    self._event_map_status = T(_("%1 extra key codes registered"), tostring(added))
+    logger.dbg("HIDPassthrough: added", added, "extra key codes to the event map")
+end
+
+------------------------------------------------------------------------------
+-- Key device attach
+------------------------------------------------------------------------------
+-- externalkeyboard matches INPUT_KEYBOARD, which FBInk only sets when keycodes
+-- 1..31 are all present, so a remote or gamepad is opened by nobody.
+
+-- Lazy: the fbink_input cdef above is a pcall, so C.INPUT_* at module scope
+-- would take the plugin down when it isn't there.
+local exclude_types
+local function excludeTypes()
+    if not exclude_types then
+        exclude_types = bit.bor(
+            C.INPUT_KEYBOARD,
+            C.INPUT_TOUCHSCREEN,
+            C.INPUT_TABLET,
+            C.INPUT_SCALED_TABLET,
+            C.INPUT_ACCELEROMETER,
+            C.INPUT_ROTATION_EVENT,
+            C.INPUT_KINDLE_FRAME_TAP,
+            C.INPUT_POWER_BUTTON,
+            C.INPUT_SLEEP_COVER)
     end
-    logger.warn("HIDPassthrough: failed to dofile bundled event_map:", map)
-    return nil
+    return exclude_types
 end
 
--- Snapshot the device-wide input caps so we can restore them when the last
--- keyboard goes away. Idempotent across multiple keyboard connects.
-function HIDPassthrough:_snapshotDeviceCaps()
-    if kb_original_caps then return end
-    kb_original_caps = {
-        event_map       = Device.input.event_map,
-        keyboard_layout = Device.keyboard_layout,
-        hasKeyboard     = Device.hasKeyboard,
-        hasKeys         = Device.hasKeys,
-        hasFewKeys      = Device.hasFewKeys,
-        hasDPad         = Device.hasDPad,
-    }
-end
-
-function HIDPassthrough:_restoreDeviceCaps()
-    if not kb_original_caps then return end
-    Device.input.event_map = kb_original_caps.event_map
-    Device.keyboard_layout = kb_original_caps.keyboard_layout
-    Device.hasKeyboard     = kb_original_caps.hasKeyboard
-    Device.hasKeys         = kb_original_caps.hasKeys
-    Device.hasFewKeys      = kb_original_caps.hasFewKeys
-    Device.hasDPad         = kb_original_caps.hasDPad
-    kb_original_caps = nil
-end
-
--- Ask FBInkInput whether `path` is a keyboard. Returns a table with fd,
--- path, name, has_dpad on success, or nil if it isn't a keyboard or the
--- check failed. Mirrors upstream externalkeyboard.koplugin's checkKeyboard.
-function HIDPassthrough:_checkKeyboard(path)
-    if not FBInkInput then return nil end
-    local ok, result = pcall(function()
-        local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEYBOARD, 0,
-            INPUT_SCAN_FLAGS)
-        if dev == nil then return nil end
-        local r
+local function checkKeyDevice(path)
+    local FBInkInput = ffi.loadlib("fbink_input", 1)
+    local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEY, excludeTypes(), 0)
+    local info
+    if dev ~= nil then
         if dev.matched then
-            r = {
-                fd       = tonumber(dev.fd),
-                path     = ffi.string(dev.path),
-                name     = ffi.string(dev.name),
-                has_dpad = bit.band(dev.type, C.INPUT_DPAD) ~= 0,
+            info = {
+                fd   = tonumber(dev.fd),
+                path = ffi.string(dev.path),
+                name = ffi.string(dev.name),
             }
         end
         C.free(dev)
-        return r
-    end)
-    if not ok then
-        logger.dbg("HIDPassthrough: _checkKeyboard error for", path, ":", result)
-        return nil
     end
-    return result
+    return info
 end
 
--- List /dev/input/event* paths. Returns nil when the directory can't be
--- enumerated, so callers can tell "no devices" apart from "listing failed".
-local function listEventPaths()
-    local ok, paths = pcall(function()
-        local t = {}
-        for name in lfs.dir("/dev/input") do
-            if name:match("^event%d+$") then
-                table.insert(t, "/dev/input/" .. name)
-            end
-        end
-        return t
-    end)
-    if not ok then
-        logger.dbg("HIDPassthrough: /dev/input listing failed:", paths)
-        return nil
+function HIDPassthrough:_attachInput(path, force)
+    if input_fds[path] and not force then return end
+    if Device.input.opened_devices[path] and not input_fds[path] then return end
+
+    local info = checkKeyDevice(path)
+    if not info then return end
+
+    -- uhid recreates the node on reconnect; a stale fd makes the input poll
+    -- fail with ENODEV and then nothing reaches any plugin.
+    if input_fds[info.path] then
+        pcall(Device.input.close, Device.input, info.path)
+        input_fds[info.path] = nil
     end
-    return paths
+
+    input_fds[info.path] = Device.input:fdopen(info.fd, info.path, info.name)
+    logger.info("HIDPassthrough: attached input", info.name, "@", info.path)
+    -- Bindings may have been registered before the device showed up.
+    self:_extendEventMap()
+    self:registerKeyEvents()
 end
 
--- Attach a keyboard given a checkKeyboard result. Idempotent: skips if the
--- path is already attached.
-function HIDPassthrough:_attachKeyboard(info)
-    if kb_attached[info.path] then return end
-
-    local ok, fd = pcall(Device.input.fdopen, Device.input,
-        info.fd, info.path, info.name)
-    if not ok then
-        logger.warn("HIDPassthrough: fdopen failed for", info.path, ":", fd)
-        return
-    end
-
-    self:_snapshotDeviceCaps()
-
-    local event_map = self:_loadKeyboardEventMap()
-    if event_map then
-        local merged = {}
-        util.tableMerge(merged, Device.input.event_map)
-        util.tableMerge(merged, event_map)
-        Device.input.event_map = merged
-    end
-
-    Device.hasKeyboard = yes
-    Device.hasKeys     = yes
-    Device.hasFewKeys  = no
-    if info.has_dpad then
-        Device.hasDPad = yes
-    end
-
-    kb_attached[info.path] = { fd = fd, has_dpad = info.has_dpad }
-    kb_count = kb_count + 1
-    logger.info("HIDPassthrough: attached keyboard", info.name, "@", info.path,
-        "(total:", kb_count, ")")
-
-    if kb_count == 1 then
-        UIManager:show(InfoMessage:new{
-            text = _("Keyboard connected"),
-            timeout = 1,
-        })
-        -- Tell every visible widget that a physical keyboard exists now,
-        -- so input fields enable hardware-keyboard handling. This is the
-        -- same dance the upstream external keyboard plugin does.
-        InputText.initInputEvents()
-        UIManager:broadcastEvent(Event:new("PhysicalKeyboardConnected"))
-    end
+function HIDPassthrough:_detachInput(path)
+    if not input_fds[path] then return end
+    Device.input:close(path)
+    input_fds[path] = nil
+    logger.info("HIDPassthrough: detached input", path)
 end
 
--- Detach a keyboard by path. Closes the fd via Input:close, decrements the
--- count, and if it was the last one, restores device caps and broadcasts
--- the disconnect event.
-function HIDPassthrough:_detachKeyboard(path)
-    local entry = kb_attached[path]
-    if not entry then return end
-
-    local ok, err = pcall(Device.input.close, Device.input, path)
-    if not ok then
-        logger.warn("HIDPassthrough: close failed for", path, ":", err)
-    end
-
-    kb_attached[path] = nil
-    kb_count = kb_count - 1
-    logger.info("HIDPassthrough: detached keyboard", path,
-        "(remaining:", kb_count, ")")
-
-    if kb_count == 0 then
-        self:_restoreDeviceCaps()
-        UIManager:show(InfoMessage:new{
-            text = _("Keyboard disconnected"),
-            timeout = 1,
-        })
-        InputText.initInputEvents()
-        UIManager:broadcastEvent(Event:new("PhysicalKeyboardDisconnected"))
-    end
-end
-
--- TODO: Remove uevent handling once koreader/koreader-base#2327 and
--- koreader/koreader#15248 are merged upstream.
--- One reconciliation pass: check every existing /dev/input/event* against
--- fbink_input_check, attach any that are keyboards we don't know about,
--- and detach any we do know about that have disappeared.
-function HIDPassthrough:_reconcileKeyboards()
-    if not self._kb_watcher_active then return end
-    if not FBInkInput then return end
-
-    local event_paths = listEventPaths()
-    if not event_paths then
-        -- Listing failed; don't treat that as "all keyboards gone".
-        UIManager:scheduleIn(self.WATCHER_INTERVAL, self._reconcileKeyboardsCb)
-        return
-    end
-
-    local seen = {}
-    for _, path in ipairs(event_paths) do
-        seen[path] = true
-        if not kb_attached[path] then
-            local info = self:_checkKeyboard(path)
-            if info then
-                self:_attachKeyboard(info)
-            end
+function HIDPassthrough:_scanInputs()
+    for name in lfs.dir("/dev/input") do
+        if name:match("^event%d+$") then
+            self:_attachInput("/dev/input/" .. name)
         end
     end
-
-    -- Detach anything we have that's no longer present.
-    local gone = {}
-    for path in pairs(kb_attached) do
-        if not seen[path] then table.insert(gone, path) end
-    end
-    for _, path in ipairs(gone) do
-        self:_detachKeyboard(path)
-    end
-
-    UIManager:scheduleIn(self.WATCHER_INTERVAL, self._reconcileKeyboardsCb)
 end
 
-function HIDPassthrough:_startKeyboardWatcher()
-    if self._kb_watcher_active then return end
-    if not FBInkInput then
-        logger.info("HIDPassthrough: keyboard watcher not started "
-            .. "(FBInkInput unavailable)")
-        return
+local type_names
+local function typeNames()
+    if not type_names then
+        type_names = {
+            { C.INPUT_POINTINGSTICK, "pointingstick" },
+            { C.INPUT_MOUSE, "mouse" },
+            { C.INPUT_TOUCHPAD, "touchpad" },
+            { C.INPUT_TOUCHSCREEN, "touchscreen" },
+            { C.INPUT_JOYSTICK, "joystick" },
+            { C.INPUT_TABLET, "tablet" },
+            { C.INPUT_KEY, "key" },
+            { C.INPUT_KEYBOARD, "keyboard" },
+            { C.INPUT_ACCELEROMETER, "accelerometer" },
+            { C.INPUT_DPAD, "dpad" },
+            { C.INPUT_VOLUME_BUTTONS, "volume" },
+        }
     end
-    self._kb_watcher_active = true
-    -- Bind a stable callback so UIManager:unschedule could find it if needed.
-    -- We don't actually unschedule by reference (the active flag handles it),
-    -- but it keeps the closure allocation out of the hot loop.
-    self._reconcileKeyboardsCb = function() self:_reconcileKeyboards() end
-    logger.info("HIDPassthrough: starting keyboard watcher")
-    UIManager:scheduleIn(1, self._reconcileKeyboardsCb)
+    return type_names
 end
 
-function HIDPassthrough:_stopKeyboardWatcher()
-    if not self._kb_watcher_active then return end
-    self._kb_watcher_active = false
-    logger.info("HIDPassthrough: keyboard watcher stopped")
+local function describeInput(path)
+    local FBInkInput = ffi.loadlib("fbink_input", 1)
+    local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEY, 0, C.SCAN_ONLY)
+    if dev == nil then return nil end
+    local name, dtype = ffi.string(dev.name), dev.type
+    C.free(dev)
+
+    local types = {}
+    for dummy, pair in ipairs(typeNames()) do -- luacheck: ignore dummy
+        if bit.band(dtype, pair[1]) ~= 0 then table.insert(types, pair[2]) end
+    end
+    return name, #types > 0 and table.concat(types, ",") or "unknown"
 end
 
-function HIDPassthrough:_detachAllKeyboards()
-    -- Snapshot keys first because _detachKeyboard mutates the table.
+function HIDPassthrough:showInputDiagnostics()
+    local lines = {
+        T(_("Extra event map: %1"), self._event_map_status or _("not loaded")),
+        T(_("Plugin directory: %1"), tostring(self.path)),
+        "",
+        _("Input devices:"),
+    }
+
     local paths = {}
-    for path in pairs(kb_attached) do table.insert(paths, path) end
-    for _, path in ipairs(paths) do
-        self:_detachKeyboard(path)
+    for name in lfs.dir("/dev/input") do
+        if name:match("^event%d+$") then
+            table.insert(paths, "/dev/input/" .. name)
+        end
+    end
+    table.sort(paths)
+
+    for dummy, path in ipairs(paths) do -- luacheck: ignore dummy
+        local name, types = describeInput(path)
+        local owner
+        if input_fds[path] then
+            owner = _("open (this plugin)")
+        elseif Device.input.opened_devices[path] then
+            owner = _("open (KOReader)")
+        else
+            owner = _("NOT OPEN - keys are ignored")
+        end
+        table.insert(lines, T("%1  %2\n    [%3]  %4",
+            path, name or "?", types or "?", owner))
+    end
+
+    UIManager:show(TextViewer:new{
+        title = _("Input diagnostics"),
+        text = table.concat(lines, "\n"),
+        justified = false,
+    })
+end
+
+-- An insert is always a new device, so force the re-open. One second, not
+-- externalkeyboard's half, so a real keyboard reaches it first.
+function HIDPassthrough:onEvdevInputInsert(path)
+    UIManager:scheduleIn(1, function() self:_attachInput(path, true) end)
+end
+
+function HIDPassthrough:onEvdevInputRemove(path)
+    UIManager:scheduleIn(1, function() self:_detachInput(path) end)
+end
+
+function HIDPassthrough:registerKeyEvents()
+    self.key_events = {}
+    local keymap = getKeymapSettings().data
+    -- Register every id, even unassigned: the action is resolved at press
+    -- time, so edits take effect without re-registering.
+    for id in pairs(keymap) do
+        self.key_events["HIDPassthroughKey_" .. id] = {
+            idToSequence(id),
+            event = "HIDPassthroughKeyAction",
+            args = id,
+        }
+    end
+    logger.dbg("HIDPassthrough: registered",
+        util.tableSize(self.key_events), "key bindings")
+end
+
+function HIDPassthrough:onPhysicalKeyboardConnected()
+    self:_extendEventMap()
+    self:registerKeyEvents()
+end
+
+-- Overrides InputContainer's handler, which drops key_events outright.
+function HIDPassthrough:onPhysicalKeyboardDisconnected()
+    self:_extendEventMap()
+    if Device:hasKeys() or next(input_fds) ~= nil then
+        self:registerKeyEvents()
+    else
+        self.key_events = {}
+    end
+end
+
+function HIDPassthrough:onHIDPassthroughKeyAction(id)
+    local actions = getKeymapSettings().data[id]
+    if type(actions) ~= "table" or next(actions) == nil then return end
+    logger.dbg("HIDPassthrough: executing binding for", id)
+    Dispatcher:execute(actions)
+    return true
+end
+
+-- Overriding onKeyPress bypasses key_events matching, so unbound keys are
+-- visible here.
+local KeyCapture = InfoMessage:extend{
+    on_key_captured = nil,
+}
+
+function KeyCapture:onKeyPress(key)
+    if MODIFIER_KEYS[key.key] then return true end
+    -- Serialize before closing.
+    local id = keyToId(key)
+    local callback = self.on_key_captured
+    UIManager:close(self)
+    if callback then callback(id) end
+    return true
+end
+
+function HIDPassthrough:captureKey(callback)
+    UIManager:show(KeyCapture:new{
+        text = _("Press the key you want to map.\n\nTap the screen to cancel."),
+        on_key_captured = callback,
+    })
+end
+
+function HIDPassthrough:genKeymapMenu()
+    local keymap = getKeymapSettings().data
+    local items = {
+        {
+            text = _("Add a key…"),
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                self:captureKey(function(id)
+                    if keymap[id] == nil then
+                        keymap[id] = {}
+                        self.updated = true
+                        self:registerKeyEvents()
+                    end
+                    -- updateItems() re-renders the cached item_table and
+                    -- doesn't re-run sub_item_table_func.
+                    if touchmenu_instance then
+                        touchmenu_instance.item_table = self:genKeymapMenu()
+                        touchmenu_instance:updateItems()
+                    end
+                    UIManager:show(InfoMessage:new{
+                        text = T(_("Bound %1. Pick an action for it below."), id),
+                        timeout = 3,
+                    })
+                end)
+            end,
+            separator = true,
+        },
+    }
+
+    local ids = {}
+    for id in pairs(keymap) do table.insert(ids, id) end
+    table.sort(ids)
+
+    -- Not `for _, id`: that shadows the gettext `_` in these closures.
+    for dummy, id in ipairs(ids) do -- luacheck: ignore dummy
+        table.insert(items, {
+            text_func = function()
+                local actions = keymap[id]
+                local label = (actions and next(actions) ~= nil)
+                    and Dispatcher:menuTextFunc(actions)
+                    or _("No action")
+                return T("%1  →  %2", id, label)
+            end,
+            -- On demand: each is the full Dispatcher tree.
+            sub_item_table_func = function() return self:genKeyActionMenu(id) end,
+            -- Also at the bottom of the action tree, but that's two pages in.
+            hold_callback = function(touchmenu_instance)
+                UIManager:show(ConfirmBox:new{
+                    text = T(_("Remove the mapping for %1?"), id),
+                    ok_text = _("Remove"),
+                    ok_callback = function()
+                        self:removeKey(id)
+                        if touchmenu_instance then
+                            touchmenu_instance.item_table = self:genKeymapMenu()
+                            touchmenu_instance:updateItems()
+                        end
+                    end,
+                })
+            end,
+            ignored_by_menu_search = true,
+        })
+    end
+
+    if #ids == 0 then
+        table.insert(items, {
+            text = _("(no keys mapped yet)"),
+            enabled = false,
+        })
+    end
+
+    -- Used by TouchMenu:backToUpperMenu when a child marks us stale.
+    items.refresh_func = function() return self:genKeymapMenu() end
+    return items
+end
+
+function HIDPassthrough:removeKey(id)
+    getKeymapSettings().data[id] = nil
+    self.updated = true
+    self:registerKeyEvents()
+end
+
+function HIDPassthrough:genKeyActionMenu(id)
+    local keymap = getKeymapSettings().data
+    local sub_items = {}
+
+    local unknown = _("Unknown item")
+    for dummy, action in ipairs(COMMON_ACTIONS) do -- luacheck: ignore dummy
+        local title = Dispatcher:getNameFromItem(action, nil, true)
+        if title ~= unknown then
+            table.insert(sub_items, {
+                text = title,
+                checked_func = function()
+                    return keymap[id] ~= nil and keymap[id][action] ~= nil
+                end,
+                callback = function(touchmenu_instance)
+                    if keymap[id] == nil then keymap[id] = {} end
+                    if keymap[id][action] == nil then
+                        keymap[id][action] = true
+                        Dispatcher._addToOrder(keymap, id, action)
+                    else
+                        keymap[id][action] = nil
+                        Dispatcher._removeFromOrder(keymap, id, action)
+                    end
+                    self.updated = true
+                    if touchmenu_instance then
+                        touchmenu_instance:updateItems()
+                    end
+                end,
+            })
+        end
+    end
+    if #sub_items > 0 then
+        sub_items[#sub_items].separator = true
+    end
+
+    Dispatcher:addSubMenu(self, sub_items, keymap, id)
+    table.insert(sub_items, {
+        text = _("Remove this key"),
+        -- Or TouchMenu closes the menu after the callback, undoing our
+        -- backToUpperMenu.
+        keep_menu_open = true,
+        callback = function(touchmenu_instance)
+            self:removeKey(id)
+            if touchmenu_instance then
+                -- Mark stale so backToUpperMenu rebuilds via refresh_func.
+                local stack = touchmenu_instance.item_table_stack
+                local parent = stack and stack[#stack]
+                if parent then parent.needs_refresh = true end
+                touchmenu_instance:backToUpperMenu()
+            end
+        end,
+    })
+    return sub_items
+end
+
+function HIDPassthrough:onFlushSettings()
+    if self.updated then
+        getKeymapSettings():flush()
+        self.updated = false
     end
 end
 
@@ -469,9 +579,7 @@ function HIDPassthrough:_spawnBinary()
     if not util.pathExists(self.DAEMON_BINARY) then
         return false, T(_("Daemon binary not found at %1."), self.DAEMON_BINARY)
     end
-    -- Detached background launch via setsid so it survives KOReader exiting.
-    -- The exit code of this command is meaningless: the subshell backgrounds
-    -- the process and returns immediately.
+    -- setsid so it survives KOReader exiting; exit code is meaningless.
     local cmd = string.format(
         "(setsid %s --daemon </dev/null >/dev/null 2>&1 &) 2>/dev/null || "
         .. "(%s --daemon </dev/null >/dev/null 2>&1 &)",
@@ -499,23 +607,9 @@ function HIDPassthrough:start()
     local state = self:getState()
 
     if state == "on" then
-        -- Daemon already running. Still make sure the watcher is going, in
-        -- case the user toggled through "on -> off (watcher stops) -> on"
-        -- without us knowing about the first transition.
-        self:_startKeyboardWatcher()
         return true, _("HID Passthrough daemon is already running.")
     end
 
-    local ok, msg = self:_doStart(state)
-    if ok then
-        self:_startKeyboardWatcher()
-    end
-    return ok, msg
-end
-
--- The original start logic, factored out so start() can wrap it with input
--- device tracking.
-function HIDPassthrough:_doStart(state)
     if state == "off" then
         -- API server not up. Spawn the binary, which brings up both layers.
         local ok, err = self:_spawnBinary()
@@ -564,11 +658,6 @@ function HIDPassthrough:stop()
         -- the idle state we want). Either way, no work to do.
         return true, _("HID Passthrough daemon is not running.")
     end
-
-    -- Detach keyboards *before* asking the daemon to stop, so the input
-    -- read loop doesn't see fds vanish under it.
-    self:_stopKeyboardWatcher()
-    self:_detachAllKeyboards()
 
     -- Ask the API server to stop the HID daemon. The API server itself stays
     -- up, matching the BTManager behavior — that way the next /start is fast.
@@ -1038,7 +1127,7 @@ function HIDPassthrough:showLogs()
 
     local viewer
     viewer = TextViewer:new{
-        title = _("HID Passthrough Logs"),
+        title = _("Recent logs"),
         text = text,
         justified = false,
         buttons_table = {
@@ -1058,6 +1147,10 @@ function HIDPassthrough:showLogs()
         },
     }
     UIManager:show(viewer)
+    -- Open on the newest lines, like tail.
+    if viewer.scroll_widget then
+        viewer.scroll_widget:scrollToBottom()
+    end
 end
 
 function HIDPassthrough:clearCache()
@@ -1092,9 +1185,7 @@ end
 ------------------------------------------------------------------------------
 
 function HIDPassthrough:onDispatcherRegisterActions()
-    -- These show up in the gesture manager under "General" category, so the
-    -- user can bind any of them to corner taps, swipes, multiswipes, or
-    -- physical buttons.
+
     Dispatcher:registerAction("hidpassthrough_start", {
         category = "none",
         event    = "HIDPassthroughStart",
@@ -1113,13 +1204,58 @@ function HIDPassthrough:onDispatcherRegisterActions()
         title    = _("HID Passthrough: Toggle daemon"),
         general  = true,
     })
+
+    -- Upstream only ships "Turn pages", a spinner. These are the fixed steps.
+    Dispatcher:registerAction("hidpassthrough_next_page", {
+        category = "none",
+        event    = "GotoViewRel",
+        arg      = 1,
+        title    = _("Next page"),
+        reader   = true,
+    })
+    Dispatcher:registerAction("hidpassthrough_prev_page", {
+        category = "none",
+        event    = "GotoViewRel",
+        arg      = -1,
+        title    = _("Previous page"),
+        reader   = true,
+    })
+
+    Dispatcher:registerAction("hidpassthrough_close", {
+        category = "none",
+        event    = "HIDPassthroughClose",
+        title    = _("Close menu or dialog"),
+        general  = true,
+    })
 end
 
--- Run a start/stop/toggle action triggered by a gesture. We can't call the
--- blocking methods directly from the dispatcher's callback because start()
--- can wait up to 15 seconds for the daemon to come up, which would freeze
--- the UI mid-gesture. So we show an immediate toast acknowledging the
--- action and defer the real work to the next UI tick.
+-- Stops one short of ReaderUI/FileManager, whose onClose exits the book.
+function HIDPassthrough:onHIDPassthroughClose()
+    local target, reached_base
+    for widget in UIManager:topdown_widgets_iter() do
+        if widget == self.ui then
+            reached_base = true
+            break
+        end
+        if not target and not widget.toast and not widget.invisible then
+            target = widget
+        end
+    end
+    if not target or not reached_base then return true end
+
+    -- Deferred: we're inside UIManager's walk down the stack we're mutating.
+    UIManager:nextTick(function()
+        if not UIManager:isWidgetShown(target) then return end
+        if target.onClose then
+            target:onClose()
+        else
+            UIManager:close(target)
+        end
+    end)
+    return true
+end
+
+-- start() can block up to 15s, so toast now and do the work next tick.
 function HIDPassthrough:_runActionAsync(label, fn)
     UIManager:show(InfoMessage:new{
         text = label,
@@ -1134,12 +1270,15 @@ function HIDPassthrough:_runActionAsync(label, fn)
     end)
 end
 
+-- true, or UIManager hands these to us again as an active widget.
 function HIDPassthrough:onHIDPassthroughStart()
     self:_runActionAsync(_("Starting HID Passthrough daemon…"), self.start)
+    return true
 end
 
 function HIDPassthrough:onHIDPassthroughStop()
     self:_runActionAsync(_("Stopping HID Passthrough daemon…"), self.stop)
+    return true
 end
 
 function HIDPassthrough:onHIDPassthroughToggle()
@@ -1147,39 +1286,41 @@ function HIDPassthrough:onHIDPassthroughToggle()
         and _("Stopping HID Passthrough daemon…")
         or  _("Starting HID Passthrough daemon…")
     self:_runActionAsync(label, self.toggle)
+    return true
+end
+
+-- AutoSuspend is the only thing re-arming powerd's t1 timeout, and it can be off (#136).
+local T1_RESET_INTERVAL = 4 * 60
+local last_t1_reset = nil
+
+function HIDPassthrough:onInputEvent()
+    if not PowerD.resetT1Timeout or PluginShare.keepalive then return end
+    if PowerD:isCharging() and not PowerD:isCharged() then return end
+
+    local now = UIManager:getElapsedTimeSinceBoot()
+    if last_t1_reset and time.to_number(now - last_t1_reset) < T1_RESET_INTERVAL then
+        return
+    end
+    last_t1_reset = now
+    logger.dbg("HIDPassthrough: re-armed powerd's t1 timeout")
+    PowerD:resetT1Timeout()
 end
 
 function HIDPassthrough:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
-
-    if kb_count > 0 then
-        self:_startKeyboardWatcher()
-        return
+    self:_extendEventMap()
+    self:registerKeyEvents()
+    -- Or no binding fires while a menu covers us. Same trick as Screenshoter.
+    if self.ui.active_widgets then
+        table.insert(self.ui.active_widgets, self)
     end
-
-    -- The daemon may already be running from a previous session (upstart,
-    -- kterm, or a leftover API server from an earlier KOReader run). If so,
-    -- kick the watcher so any keyboard connected later gets picked up. We
-    -- defer the HTTP probe to avoid blocking plugin init.
-    self._init_probe_cb = function()
-        self._init_probe_cb = nil
-        if self:isRunning() then
-            logger.info("HIDPassthrough: daemon already running on init, "
-                .. "starting keyboard watcher")
-            self:_startKeyboardWatcher()
-        end
-    end
-    UIManager:scheduleIn(2, self._init_probe_cb)
+    UIManager.event_hook:registerWidget("InputEvent", self)
+    -- A device may already be connected.
+    self:_scanInputs()
 end
 
--- Fires on every FileManager <-> ReaderUI switch; keyboards stay attached.
 function HIDPassthrough:onCloseWidget()
-    if self._init_probe_cb then
-        UIManager:unschedule(self._init_probe_cb)
-        self._init_probe_cb = nil
-    end
-    self:_stopKeyboardWatcher()
     self:_cancelPolls()
 end
 
@@ -1196,7 +1337,7 @@ end
 
 function HIDPassthrough:addToMainMenu(menu_items)
     menu_items.hid_passthrough = {
-        text = _("HID Passthrough"),
+        text = _("BT Manager - HID Passthrough"),
         -- Land in Settings → Network alongside SSH.
         sorting_hint = "network",
         -- Top-level checked state mirrors the daemon, so users can see at
@@ -1229,21 +1370,37 @@ function HIDPassthrough:addToMainMenu(menu_items)
                 callback = function() self:showPairedDevices() end,
             },
             {
-                text = _("Show daemon status"),
+                text = _("Key mappings"),
                 keep_menu_open = true,
-                callback = function() self:showInfo() end,
-            },
-            {
-                text = _("Recent logs"),
-                keep_menu_open = true,
-                callback = function() self:showLogs() end,
-            },
-            {
-                text = _("Clear descriptor cache"),
-                enabled_func = function() return self:isRunning() end,
-                keep_menu_open = true,
-                callback = function() self:clearCache() end,
+                sub_item_table_func = function() return self:genKeymapMenu() end,
                 separator = true,
+            },
+            {
+                text = _("Debug"),
+                separator = true,
+                sub_item_table = {
+                    {
+                        text = _("Show daemon status"),
+                        keep_menu_open = true,
+                        callback = function() self:showInfo() end,
+                    },
+                    {
+                        text = _("Recent logs"),
+                        keep_menu_open = true,
+                        callback = function() self:showLogs() end,
+                    },
+                    {
+                        text = _("Input diagnostics"),
+                        keep_menu_open = true,
+                        callback = function() self:showInputDiagnostics() end,
+                    },
+                    {
+                        text = _("Clear descriptor cache"),
+                        enabled_func = function() return self:isRunning() end,
+                        keep_menu_open = true,
+                        callback = function() self:clearCache() end,
+                    },
+                },
             },
             {
                 text = _("About HID Passthrough"),

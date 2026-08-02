@@ -177,8 +177,7 @@ class Scanner:
                 except UnicodeDecodeError as e:
                     log.debug(f"Using Unknown name for malformed BLE advertisement from {addr_str}: {e}")
                     name = 'Unknown'
-                if isinstance(name, bytes):
-                    name = clean_device_name(name) or 'Unknown'
+                name = clean_device_name(name) or 'Unknown'
 
             device = DiscoveredDevice(
                 address=addr_str,
@@ -235,6 +234,10 @@ class Scanner:
                         name_data = eir_data.get(0x09) or eir_data.get(0x08)
                         if name_data:
                             name = clean_device_name(name_data) or 'Unknown'
+                            raw = (name_data if isinstance(name_data, bytes)
+                                   else str(name_data).encode('utf-8', errors='replace'))
+                            if name != raw.decode('utf-8', errors='ignore').strip():
+                                log.info(f"  Cleaned EIR name for {addr_str}: {raw.hex()}")
                     except Exception:
                         pass
 

@@ -114,6 +114,7 @@ jobs:
             illusion/BTManager.sh \
             koreader-plugin/hidpassthrough.koplugin/main.lua \
             koreader-plugin/hidpassthrough.koplugin/_meta.lua \
+            koreader-plugin/hidpassthrough.koplugin/event_map_extra.lua \
             config.ini \
             dist/main.bin; do
             if ! tar -tzf kindle-hid-passthrough-armv7.tar.gz "./$f" >/dev/null 2>&1; then

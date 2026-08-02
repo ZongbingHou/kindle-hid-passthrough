@@ -126,7 +126,9 @@ edit-devices:
 
 # Show pairing keys
 keys:
-    @ssh {{host}} "cat {{remote_dir}}/cache/pairing_keys.json 2>/dev/null | python3 -m json.tool || echo 'No pairing keys'"
+    @ssh {{host}} "[ -f {{remote_dir}}/cache/pairing_keys.json ] \
+        && {{python}} -m json.tool {{remote_dir}}/cache/pairing_keys.json \
+        || echo 'No pairing keys'"
 
 # Print a read-only diagnostics dump for bug reports
 diagnostics:
@@ -169,6 +171,7 @@ run:
 # Deploy KOReader plugin to Kindle
 deploy-koreader:
     @echo "Deploying KOReader plugin..."
+    ssh {{host}} "rm -rf /mnt/us/koreader/plugins/hidpassthrough.koplugin"
     (cd {{src_dir}} && tar cf - \
         --transform='s|^koreader-plugin/hidpassthrough.koplugin/|mnt/us/koreader/plugins/hidpassthrough.koplugin/|' \
         koreader-plugin/hidpassthrough.koplugin/ \

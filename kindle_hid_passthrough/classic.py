@@ -8,6 +8,7 @@ from bumble.core import BT_BR_EDR_TRANSPORT, BT_HUMAN_INTERFACE_DEVICE_SERVICE, 
 from bumble.hci import (
     Address,
     HCI_Write_Scan_Enable_Command,
+    Role,
 )
 from bumble.hid import HID_CONTROL_PSM, HID_INTERRUPT_PSM, Message
 from bumble.hid import Host as BumbleHIDHost
@@ -81,69 +82,73 @@ class ClassicMixin:
                     pass
                 return
 
+            if self.connection is not None and self.connection is not connection:
+                try:
+                    self.connection.remove_listener('disconnection', self._on_disconnection)
+                except Exception:
+                    pass
+
+            self._disconnection_event.clear()
+
+            conn_lost = asyncio.Event()
+
+            def on_conn_lost(reason):
+                conn_lost.set()
+
             self.connection = connection
             self.current_device_address = addr_str
             self.connected_protocol = Protocol.CLASSIC
+            connection.on('disconnection', on_conn_lost)
             connection.on('disconnection', self._on_disconnection)
 
             self.hid_host.on_device_connection(connection)
 
-            auth_event = asyncio.Event()
+            if connection.role != Role.CENTRAL:
+                log.info("[Classic] Requesting role switch to central...")
+                try:
+                    await asyncio.wait_for(connection.switch_role(Role.CENTRAL), timeout=5.0)
+                    log.success("[Classic] Role switch complete, now central")
+                except Exception as e:
+                    log.warning(f"[Classic] Role switch failed: {e!r}")
 
-            def on_auth():
-                log.success("[Classic] Device authenticated us")
-                auth_event.set()
+            if conn_lost.is_set():
+                log.warning("[Classic] Connection lost during role switch")
+                return
 
-            def on_auth_fail(error):
-                log.warning(f"[Classic] Auth failed: {error}")
-                auth_event.set()
+            if not connection.is_encrypted:
+                log.info("[Classic] Restoring bonding (authenticate + encrypt)...")
+                try:
+                    await asyncio.wait_for(connection.authenticate(), timeout=5.0)
+                    await asyncio.wait_for(connection.encrypt(enable=True), timeout=5.0)
+                    log.success("[Classic] Bonding restored")
+                except Exception as e:
+                    log.warning(f"[Classic] Bonding restore failed: {e!r}")
 
-            connection.on('connection_authentication', on_auth)
-            connection.on('connection_authentication_failure', on_auth_fail)
-
-            log.info("[Classic] Waiting for device authentication...")
-            try:
-                await asyncio.wait_for(auth_event.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                log.warning("[Classic] No auth request from device, continuing...")
-
-            try:
-                connection.remove_listener('connection_authentication', on_auth)
-                connection.remove_listener('connection_authentication_failure', on_auth_fail)
-            except Exception:
-                pass
-
-            if self._disconnection_event.is_set():
+            if conn_lost.is_set():
                 log.warning("[Classic] Connection lost during authentication")
                 return
 
-            log.info("[Classic] Waiting for HID channels...")
-            for _ in range(30):
-                if self._disconnection_event.is_set():
-                    log.warning("[Classic] Connection lost while waiting for HID channels")
-                    return
-                if self.hid_host.l2cap_intr_channel and self.hid_host.l2cap_ctrl_channel:
-                    log.success("[Classic] HID channels opened")
-                    break
-                await asyncio.sleep(0.1)
-
-            if self._disconnection_event.is_set():
-                log.warning("[Classic] Connection lost during HID setup")
-                return
-
             if not self.hid_host.l2cap_ctrl_channel:
+                log.info("[Classic] Connecting to HID control channel...")
                 try:
                     await asyncio.wait_for(self.hid_host.connect_control_channel(), timeout=5.0)
-                except Exception:
-                    pass
+                    log.success("[Classic] HID control channel connected")
+                except Exception as e:
+                    log.warning(f"[Classic] Control channel: {e!r}")
+
+            if conn_lost.is_set():
+                log.warning("[Classic] Connection lost during channel setup")
+                return
 
             if not self.hid_host.l2cap_intr_channel:
+                log.info("[Classic] Connecting to HID interrupt channel...")
                 try:
                     await asyncio.wait_for(self.hid_host.connect_interrupt_channel(), timeout=5.0)
-                except Exception:
-                    pass
+                    log.success("[Classic] HID interrupt channel connected")
+                except Exception as e:
+                    log.warning(f"[Classic] Interrupt channel: {e!r}")
 
-            if self._disconnection_event.is_set():
+            if conn_lost.is_set():
                 log.warning("[Classic] Connection lost during channel setup")
                 return
 
@@ -173,7 +178,11 @@ class ClassicMixin:
                           or not hasattr(connection, 'transport')
             if not is_classic:
                 return
+            prev_task = getattr(self, '_classic_conn_task', None)
+            if prev_task is not None and not prev_task.done():
+                prev_task.cancel()
             task = asyncio.create_task(on_classic_connection(connection))
+            self._classic_conn_task = task
             self._connection_tasks.add(task)
             task.add_done_callback(self._connection_tasks.discard)
 
@@ -242,7 +251,11 @@ class ClassicMixin:
                     await connect_task
 
                 except Exception as e:
-                    if "DISALLOWED" in str(e) or "PENDING" in str(e):
+                    msg = str(e)
+                    if "CONNECTION_ALREADY_EXISTS" in msg:
+                        log.info("[Classic] Peer paged us first; yielding to incoming link")
+                        await asyncio.sleep(2.0)
+                    elif "DISALLOWED" in msg or "PENDING" in msg:
                         log.warning("[Classic] HCI busy, waiting...")
                         await asyncio.sleep(5.0)
                     else:
@@ -372,7 +385,7 @@ class ClassicMixin:
                 await asyncio.wait_for(self.connection.authenticate(), timeout=30.0)
                 log.success("[Classic] Authentication complete")
             except Exception as e:
-                log.warning(f"[Classic] Authentication: {e}")
+                log.warning(f"[Classic] Authentication: {e!r}")
 
             log.info("[Classic] Waiting for link key...")
             try:
@@ -389,7 +402,7 @@ class ClassicMixin:
                         timeout=10.0
                     )
                 except Exception as e:
-                    log.warning(f"[Classic] Encryption: {e}")
+                    log.warning(f"[Classic] Encryption: {e!r}")
 
             await self._query_classic_sdp(address)
 
@@ -472,14 +485,14 @@ class ClassicMixin:
             await asyncio.wait_for(self.hid_host.connect_control_channel(), timeout=5.0)
             log.success("[Classic] HID control channel connected")
         except Exception as e:
-            log.warning(f"[Classic] Control channel: {e}")
+            log.warning(f"[Classic] Control channel: {e!r}")
 
         log.info("[Classic] Connecting to HID interrupt channel...")
         try:
             await asyncio.wait_for(self.hid_host.connect_interrupt_channel(), timeout=5.0)
             log.success("[Classic] HID interrupt channel connected")
         except Exception as e:
-            log.warning(f"[Classic] Interrupt channel: {e}")
+            log.warning(f"[Classic] Interrupt channel: {e!r}")
 
         if not self.hid_host.l2cap_intr_channel:
             log.error("[Classic] Failed to connect HID interrupt channel")

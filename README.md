@@ -8,7 +8,11 @@
 
 A userspace Bluetooth HID host for Amazon Kindle e-readers. Connects Bluetooth HID devices (gamepads, keyboards, remotes) and passes input directly to Linux via UHID.
 
-> **Note:** This project is normally paired with [kindle-button-mapper-rs](https://github.com/zampierilucas/kindle-button-mapper-rs), which maps the connected controller's buttons to Kindle actions (page turns, etc.). Without it, gamepads and remotes connect but don't do anything useful.
+> **Note:** On its own this project only connects a device. Something still has to decide what its buttons *do*, or gamepads and remotes pair fine and then sit there.
+>
+> **If you only care about KOReader**, use the bundled [KOReader plugin](koreader-plugin/README.md). Bind any button to any KOReader action from inside KOReader, nothing else to install. That covers most people.
+>
+> **If you want mappings that work system-wide**, outside KOReader as well as in it, pair this with [kindle-button-mapper-rs](https://github.com/zampierilucas/kindle-button-mapper-rs). More setup, more power, and the only option for analog sticks.
 
 ## Overview
 
@@ -43,6 +47,10 @@ Kernels without UHID support are handled automatically: the daemon loads a bundl
 
 ## Installation
 
+### Video guide
+
+Community walkthrough by [@jencaps89](https://www.tiktok.com/@jencaps89) showing the whole setup as a Bluetooth page turner, [watch it on TikTok](https://www.tiktok.com/@jencaps89/video/7658167614736223496) or through the [embedded player](https://www.tiktok.com/player/v1/7658167614736223496) if you'd rather not log in.
+
 ### KindleForge (recommended)
 
 Install directly from [KindleForge](https://github.com/KindleTweaks/KindleForge) — search for "Kindle HID Passthrough" in the on-device app store.
@@ -67,19 +75,30 @@ Install directly from [KindleForge](https://github.com/KindleTweaks/KindleForge)
 
 ### BTManager
 
-A built-in Kindle app for managing Bluetooth HID devices from the touchscreen — no SSH needed. Scan for devices, pair, remove, start/stop the daemon, all from the Kindle UI.
+A built-in Kindle app for managing Bluetooth HID devices from the touchscreen — no SSH needed. Scan for devices, pair, connect, remove, toggle the daemon, all from the Kindle UI.
 
-![BTManager scan & pair](docs/screenshots/btmanager-scan.png)
+<p align="center">
+  <img src="docs/screenshots/btmanager-main.png" width="32%" alt="Paired devices">
+  <img src="docs/screenshots/btmanager-scan.png" width="32%" alt="Scanning">
+  <img src="docs/screenshots/btmanager-device.png" width="32%" alt="Device details">
+</p>
+
+Paired list, scanning for nearby BLE and Classic HID devices, and the per-device view with status, protocol, address, connect and remove.
 
 Installed automatically via KindleForge. For manual installs, use option 6 in `scripts/install.sh`.
 
 ### KOReader plugin
 
-If you use KOReader, a bundled plugin gives you the same scan / pair / connect / disconnect / logs / cache controls from inside KOReader — no need to exit. Open via **cog icon (Settings) → Network → HID Passthrough**.
+If you use KOReader, a bundled plugin gives you the same scan / pair / connect / disconnect / logs / cache controls from inside KOReader — no need to exit. Open via **cog icon (Settings) → Network → BT Manager - HID Passthrough**.
 
-![KOReader plugin menu](koreader-plugin/screenshots/menu.png)
+It also maps keys. Press a button on a connected keyboard, gamepad or remote and bind it to any KOReader action, in-process, with no extra daemon and no HTTP Inspector.
 
-Auto-installed via the interactive installer when `/mnt/us/koreader/plugins/` exists. See [`koreader-plugin/README.md`](koreader-plugin/README.md) for details.
+<p align="center">
+  <img src="koreader-plugin/screenshots/menu.png" width="48%" alt="Plugin menu">
+  <img src="koreader-plugin/screenshots/key-mappings.png" width="48%" alt="Key mappings">
+</p>
+
+For most people this is all you need, and it's the simpler half of the note at the top of this README. Auto-installed via the interactive installer when `/mnt/us/koreader/plugins/` exists. Requires KOReader 2026.07 or newer, which handles keyboard hot-plug natively. See [`koreader-plugin/README.md`](koreader-plugin/README.md) for details.
 
 ## Usage
 

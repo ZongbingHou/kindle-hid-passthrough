@@ -11,6 +11,7 @@ var BTManager = (function() {
     var HELPER_URL = "http://localhost:8321";
     var POLL_INTERVAL = 3000;
     var MESSAGE_TIMEOUT = 4000;
+    var LOG_VIEW_MAX_CHARS = 6000;
 
     var pollTimer = null;
     var messageTimer = null;
@@ -30,6 +31,7 @@ var BTManager = (function() {
 
     // Currently viewed device in detail overlay
     var detailDevice = null;
+    var detailRenderKey = "";
 
     // ---- XHR Helper ----
 
@@ -95,7 +97,7 @@ var BTManager = (function() {
 
     function showMessage(text, isError) {
         var bar = getEl("messageBar");
-        bar.innerHTML = text;
+        setText(bar, text);
         bar.className = "message-bar visible" + (isError ? " error" : "");
         if (messageTimer) clearTimeout(messageTimer);
         messageTimer = setTimeout(function() {
@@ -103,12 +105,46 @@ var BTManager = (function() {
         }, MESSAGE_TIMEOUT);
     }
 
+    // Daemon log lines reach this page verbatim. They carry ANSI colour escapes
+    // and can carry C0/C1 control bytes, neither of which escapeHtml touches and
+    // both of which corrupt the WebKit view this runs in.
+    function sanitizeText(str) {
+        if (str === null || str === undefined) return "";
+        str = String(str);
+        str = str.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, "");
+        return str.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+    }
+
     function escapeHtml(str) {
+        str = sanitizeText(str);
         if (!str) return "";
         return str.replace(/&/g, "&amp;")
                   .replace(/</g, "&lt;")
                   .replace(/>/g, "&gt;")
                   .replace(/"/g, "&quot;");
+    }
+
+    // Assign log text as a text node rather than markup. escapeHtml is enough for
+    // correctness, but a text node cannot be reinterpreted as markup at all, which
+    // is the property worth having for content the page does not author.
+    function setText(el, text) {
+        if (!el) return;
+        text = sanitizeText(text);
+        while (el.firstChild) {
+            el.removeChild(el.firstChild);
+        }
+        el.appendChild(document.createTextNode(text));
+    }
+
+    // Cap what the viewer holds. The log endpoint is polled every few seconds and
+    // the oldest lines are the least interesting, so keep the tail.
+    function renderLogLines(lines) {
+        if (!lines) return "";
+        var text = sanitizeText(lines.join("\n"));
+        if (text.length > LOG_VIEW_MAX_CHARS) {
+            text = text.slice(text.length - LOG_VIEW_MAX_CHARS);
+        }
+        return text;
     }
 
     // ---- Toggle ----
@@ -188,6 +224,8 @@ var BTManager = (function() {
             }
 
             lastStatus = data;
+
+            renderDeviceDetail();
         });
     }
 
@@ -239,7 +277,7 @@ var BTManager = (function() {
             var proto = escapeHtml(dev.protocol || "");
             var name = escapeHtml(dev.name || "") || addr;
 
-            html += '<div class="device-row" data-addr="' + addr + '" data-proto="' + proto + '" data-name="' + escapeHtml(dev.name || "") + '" data-connected="' + (isConnected ? '1' : '0') + '">';
+            html += '<div class="device-row" data-addr="' + addr + '" data-proto="' + proto + '" data-name="' + escapeHtml(dev.name || "") + '">';
             html += '<span class="device-row-chevron">&#x276F;</span>';
             html += '<div class="device-row-name' + (isConnected ? '' : ' idle') + '">' + name + '</div>';
             html += '<div class="device-row-sub">' + proto.toUpperCase() + '</div>';
@@ -250,49 +288,65 @@ var BTManager = (function() {
 
     // ---- Device Detail Overlay ----
 
-    function showDeviceDetail(addr, proto, name, isConnected) {
-        detailDevice = { addr: addr, proto: proto, name: name, connected: isConnected };
+    function showDeviceDetail(addr, proto, name) {
+        detailDevice = { addr: addr, proto: proto, name: name, connected: false };
+        detailRenderKey = "";
         window.scrollTo(0, 0);
+        renderDeviceDetail();
+        getEl("deviceOverlay").className = "device-overlay visible";
+    }
 
-        getEl("detailName").innerHTML = escapeHtml(name) || escapeHtml(addr);
+    function isDetailConnected() {
+        if (!detailDevice || !detailDevice.addr) return false;
+        if (!lastStatus || !lastStatus.connected_device) return false;
+        return lastStatus.connected_device.toUpperCase() === detailDevice.addr.toUpperCase();
+    }
+
+    function renderDeviceDetail() {
+        if (!detailDevice) return;
+
+        var isConnected = isDetailConnected();
+        detailDevice.connected = isConnected;
+
+        var uhid = isConnected && lastStatus ? (lastStatus.uhid_name || "") : "";
+        var inputs = isConnected && lastStatus && lastStatus.input_paths
+            ? lastStatus.input_paths.join(", ") : "";
+        var hidReady = isConnected && lastStatus ? lastStatus.hid_ready : null;
+
+        var key = [isConnected ? "1" : "0", String(hidReady), uhid, inputs,
+                   detailDevice.name, detailDevice.proto].join("|");
+        if (key === detailRenderKey) return;
+        detailRenderKey = key;
+
+        getEl("detailName").innerHTML = escapeHtml(detailDevice.name) || escapeHtml(detailDevice.addr);
         getEl("detailStatus").innerHTML = isConnected ? "&#x25CF; Connected" : "&#x25CB; Not Connected";
-        getEl("detailProtocol").innerHTML = escapeHtml(proto).toUpperCase();
-        getEl("detailAddress").innerHTML = escapeHtml(addr);
+        getEl("detailProtocol").innerHTML = escapeHtml(detailDevice.proto).toUpperCase();
+        getEl("detailAddress").innerHTML = escapeHtml(detailDevice.addr);
+        getEl("btnDetailAction").innerHTML = isConnected ? "Disconnect" : "Connect";
 
-        var actionBtn = getEl("btnDetailAction");
-        if (isConnected) {
-            actionBtn.innerHTML = "Disconnect";
-        } else {
-            actionBtn.innerHTML = "Connect";
-        }
-
-        // HID info
         var hidSection = getEl("detailHid");
         var hidWarn = getEl("detailHidWarning");
         hidSection.style.display = "none";
         hidWarn.style.display = "none";
 
-        if (isConnected && lastStatus) {
-            var uhid = lastStatus.uhid_name;
-            var inputs = lastStatus.input_paths;
-            if (lastStatus.hid_ready === false) {
+        if (isConnected) {
+            if (hidReady === false) {
                 hidWarn.style.display = "block";
                 getEl("detailUhid").innerHTML = "--";
                 getEl("detailInputPaths").innerHTML = "--";
                 hidSection.style.display = "block";
             } else if (uhid || inputs) {
-                getEl("detailUhid").innerHTML = escapeHtml(uhid || "--");
-                getEl("detailInputPaths").innerHTML = inputs && inputs.length ? escapeHtml(inputs.join(", ")) : "--";
+                getEl("detailUhid").innerHTML = escapeHtml(uhid) || "--";
+                getEl("detailInputPaths").innerHTML = escapeHtml(inputs) || "--";
                 hidSection.style.display = "block";
             }
         }
-
-        getEl("deviceOverlay").className = "device-overlay visible";
     }
 
     function hideDeviceDetail() {
         getEl("deviceOverlay").className = "device-overlay";
         detailDevice = null;
+        detailRenderKey = "";
     }
 
     function detailAction() {
@@ -484,7 +538,7 @@ var BTManager = (function() {
         window.scrollTo(0, 0);
         getEl("pairMessage").innerHTML = "Pairing...";
         getEl("pairAddr").innerHTML = escapeHtml(addr);
-        getEl("pairLogContent").innerHTML = "";
+        setText(getEl("pairLogContent"), "");
         getEl("pairOverlay").className = "pair-overlay visible";
         pollPairLogs();
 
@@ -550,7 +604,7 @@ var BTManager = (function() {
             if (!isPairing) return;
             if (data && data.lines) {
                 var viewer = getEl("pairLogContent");
-                viewer.innerHTML = escapeHtml(data.lines.join("\n"));
+                setText(viewer, renderLogLines(data.lines));
                 var container = viewer.parentNode;
                 container.scrollTop = container.scrollHeight;
             }
@@ -591,11 +645,11 @@ var BTManager = (function() {
     function fetchLogs() {
         request("/logs?lines=100", function(data, err) {
             if (err) {
-                getEl("logContent").innerHTML = "Error loading logs: " + escapeHtml(err);
+                setText(getEl("logContent"), "Error loading logs: " + err);
                 return;
             }
             if (data && data.lines) {
-                getEl("logContent").innerHTML = escapeHtml(data.lines.join("\n"));
+                setText(getEl("logContent"), renderLogLines(data.lines));
                 var viewer = getEl("logViewer");
                 viewer.scrollTop = viewer.scrollHeight;
             }
@@ -712,8 +766,7 @@ var BTManager = (function() {
                     addr = row.getAttribute("data-addr");
                     proto = row.getAttribute("data-proto");
                     name = row.getAttribute("data-name");
-                    var isConn = row.getAttribute("data-connected") === "1";
-                    showDeviceDetail(addr, proto, name, isConn);
+                    showDeviceDetail(addr, proto, name);
                     return;
                 }
                 row = row.parentNode;
