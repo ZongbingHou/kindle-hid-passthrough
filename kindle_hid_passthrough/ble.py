@@ -154,7 +154,7 @@ class BLEMixin:
                     connection_interval_min=12,
                     connection_interval_max=24,
                     max_latency=0,
-                    supervision_timeout=72,
+                    supervision_timeout=3000,
                     min_ce_length=0,
                     max_ce_length=0,
                 ), check_result=True)
@@ -352,11 +352,22 @@ class BLEMixin:
 
     async def _setup_ble_hid(self):
         """Discover reports, create UHID, subscribe. Common to connect and post-pair."""
+        # 1. 优先尝试从本地 Cache 载入 Report Map，避免发起耗时的 GATT 搜寻
+        if not self.report_map:
+            self._load_cached_descriptor()
+
+        # 2. 如果缓存和当前都没有 hid_reports，才去执行真实的 GATT 搜寻
         if not self.hid_reports:
             await self._discover_ble_hid_service(process_reports=True)
+
         if not self.report_map:
             raise InvalidStateError("[BLE] No report descriptor available")
-        self._create_uhid_device()
+
+        # 3. 检查 host 上是否已经存在 UHID 设备，避免重复创建
+        if getattr(self, 'uhid_device', None) is None:
+            self._create_uhid_device()
+
+        # 4. 快速订阅 Report 并激活 HID 服务
         await self._subscribe_to_ble_reports()
         await self._ble_activate_hid_service()
 
