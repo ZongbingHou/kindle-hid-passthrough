@@ -352,6 +352,8 @@ class BLEMixin:
 
     async def _setup_ble_hid(self):
         """Discover reports, create UHID, subscribe. Common to connect and post-pair."""
+        self._subscribed_chars = set()
+
         if not self.report_map:
             self._load_cached_descriptor()
         
@@ -411,12 +413,20 @@ class BLEMixin:
 
     async def _subscribe_to_ble_reports(self):
         """Subscribe to BLE HID input report notifications."""
+        if not hasattr(self, '_subscribed_chars'):
+            self._subscribed_chars = set()
+
         for report_id, char in self.hid_reports:
+            if char.handle in self._subscribed_chars:
+                log.info(f"[BLE] Report {report_id} already subscribed, skipping CCCD write")
+                continue
+
             try:
                 def make_callback(rid):
                     return lambda value: self._on_ble_hid_report(value, rid)
 
                 await self.peer.subscribe(char, make_callback(report_id))
+                self._subscribed_chars.add(char.handle)
                 log.success(f"[BLE] Subscribed to report {report_id}")
             except Exception as e:
                 log.warning(f"[BLE] Failed to subscribe to report {report_id}: {e}")
