@@ -20,6 +20,8 @@ return {
 
     -- Editing / application keys
     [113] = "Mute",
+    [114] = "VMinus",
+    [115] = "VPlus",
     [128] = "Stop",
     [129] = "Again",
     [130] = "Props",
@@ -89,6 +91,16 @@ return {
     [224] = "BrightnessDown",
     [225] = "BrightnessUp",
     [226] = "Media",
+
+    -- Physical Kindle page-turn codes, absent on button-less models. A BT
+    -- page-turner sends the same codes (KEY_PAGEUP=104 / KEY_PAGEDOWN=109),
+    -- so naming them here lets it drive KOReader's native PgFwd/PgBack
+    -- handling (and the plugin's key map) out of the box. Only ever added
+    -- when the platform map leaves them unset, so real page buttons win.
+    [104] = "LPgBack",
+    [109] = "LPgFwd",
+    [158] = "RPgBack",
+    [159] = "RPgFwd",
 
     -- BTN_0 .. BTN_9
     [256] = "Btn0",
