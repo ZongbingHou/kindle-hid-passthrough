@@ -6,7 +6,25 @@ import os
 import struct
 from typing import Optional
 
-__all__ = ['UHIDDevice', 'UHIDError', 'Bus', 'strip_digitizer_collections']
+__all__ = ['UHIDDevice', 'UHIDError', 'Bus', 'build_uhid_report', 'strip_digitizer_collections']
+
+
+def build_uhid_report(report_id: int, value: bytes) -> bytes:
+    """Build the exact report bytes to hand to the UHID device for a BLE
+    HID report.
+
+    The HID-over-GATT Report characteristic value already carries the Report
+    ID byte as its first byte whenever the device uses a non-zero report ID
+    (Bluetooth HID Service spec). Prepending it again corrupts every report —
+    a keyboard gains a phantom modifier byte, and a consumer/media report's
+    16-bit usage gets misaligned, which is why volume keys stop working after
+    a reconnect. Some devices violate the spec and omit the Report ID, so
+    only add it back when it is genuinely missing.
+    """
+    value = bytes(value)
+    if report_id and (not value or value[0] != report_id):
+        return bytes([report_id]) + value
+    return value
 
 logger = logging.getLogger(__name__)
 
