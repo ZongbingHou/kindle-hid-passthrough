@@ -26,6 +26,7 @@ from bumble.hci import (
 
 from config import Protocol, config, normalize_addr, clean_device_name
 from logging_utils import log
+from uhid_handler import build_uhid_report
 
 HID_REPORT_TYPE_INPUT = 1
 
@@ -473,7 +474,7 @@ class BLEMixin:
 
     def _on_ble_hid_report(self, value, report_id):
         """Handle BLE HID report."""
-        self._forward_report(bytes([report_id]) + bytes(value))
+        self._forward_report(build_uhid_report(report_id, value))
 
     async def _pair_ble(self, address: str) -> bool:
         """Pair with a BLE device."""
